@@ -95,13 +95,215 @@ class Messenger_bot_enhancers extends Home
       $this->fb_user_info_table_name="facebook_rx_fb_user_info";
       $this->fb_rx_config_table_name="facebook_rx_config";
       $this->facebook_rx_config_id="facebook_rx_config_id";
-     
+     // Normalize platform language and load language files with English fallback
+        $raw = $this->config->item('language') ?: 'english';
+        $lang = strtolower($raw);
+        if ($lang === 'ar' || $lang === 'arabic') $lang = 'arabic';
+        elseif ($lang === 'en' || $lang === 'english') $lang = 'english';
+        else $lang = 'english';
+
+        // Load english as fallback then selected language to override
+        $this->lang->load('pro_templates_manager', 'english');
+        $this->lang->load('pro_templates_manager', $lang);
+
+        $this->user_id = $this->session->userdata('user_id') ?: null;
+        $this->module_access = $this->session->userdata('module_access') ?: array();
     }
 
     public function index()
     {
       $this->subscriber_broadcast_campaign();
     }
+   public function pro_templates_manager()
+    {
+        if ($this->session->userdata('user_type') != 'Admin' && !in_array(211, $this->module_access)) {
+            redirect('home/login_page', 'location');
+        }
+
+        $data               = array();
+        $data['page_title'] = $this->lang->line('ptm_title') ?: 'Pro Templates Manager';
+        $data['body']       = 'messenger_bot_enhancers/pro_templates_manager';
+        $this->_viewcontroller($data);
+    }
+
+    public function create_template_action()
+    {
+        $this->output->set_content_type('application/json; charset=utf-8');
+        try {
+            if (empty($this->user_id)) throw new Exception('Unauthorized');
+
+            $id            = trim($this->input->post('id', true));
+            $title         = trim($this->input->post('title', true));
+            $template_type = trim($this->input->post('template_type', true));
+            $payload_raw   = $this->input->post('payload', false);
+            $image_url_in  = trim($this->input->post('image_url', true)); // optional
+
+            if ($title === '') throw new Exception($this->lang->line('ptm_err_title_required') ?: 'Template title is required');
+            if ($template_type === '') throw new Exception($this->lang->line('ptm_err_type_required') ?: 'Template type is required');
+
+            // Upload image from any expected field name
+            $uploaded_url = '';
+            $file_fields  = array('image','twb_image','gen_image');
+            foreach ($file_fields as $ff) {
+                if (!empty($_FILES[$ff]) && isset($_FILES[$ff]['error']) && $_FILES[$ff]['error'] === UPLOAD_ERR_OK) {
+                    $uploaded_url = $this->save_uploaded_image($_FILES[$ff]);
+                    if ($uploaded_url) break;
+                }
+            }
+
+            // Final image URL preference: uploaded > provided URL
+            $final_image_url = $uploaded_url ?: $image_url_in;
+
+            // Decode payload
+            $payload_arr = array();
+            if ($payload_raw) {
+                $decoded = json_decode($payload_raw, true);
+                if (is_array($decoded)) $payload_arr = $decoded;
+            }
+
+            // Always inject image_url into payload if available (covers TWB + Generic)
+            if ($final_image_url) {
+                $payload_arr['image_url'] = $final_image_url;
+            }
+
+            $now  = date('Y-m-d H:i:s');
+            $data = array(
+                'user_id'       => (int)$this->user_id,
+                'title'         => $title,
+                'template_type' => $template_type,
+                'payload'       => json_encode($payload_arr, JSON_UNESCAPED_UNICODE),
+                'image_url'     => $final_image_url ?: null, // also store top-level for fallback
+                'updated_at'    => $now
+            );
+
+            if (!empty($id)) {
+                $this->db->where(array('id' => (int)$id, 'user_id' => $this->user_id))->update('pro_templates', $data);
+                $insert_id = (int)$id;
+            } else {
+                $data['created_at'] = $now;
+                $this->db->insert('pro_templates', $data);
+                $insert_id = (int)$this->db->insert_id();
+            }
+
+            $data['id'] = $insert_id;
+
+            echo json_encode(array(
+                'status'    => '1',
+                'message'   => $this->lang->line('ptm_msg_saved') ?: 'Template saved successfully.',
+                'template'  => $data,
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+            return;
+
+        } catch (Exception $e) {
+            echo json_encode(array(
+                'status'    => '0',
+                'message'   => $e->getMessage(),
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+            return;
+        }
+    }
+
+    public function list_templates()
+    {
+        $this->output->set_content_type('application/json; charset=utf-8');
+        try {
+            if (empty($this->user_id)) throw new Exception('Unauthorized');
+            $rows = $this->db->order_by('updated_at', 'DESC')
+                             ->get_where('pro_templates', array('user_id' => $this->user_id))
+                             ->result_array();
+
+            echo json_encode(array(
+                'status'    => '1',
+                'data'      => $rows,
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+        } catch (Exception $e) {
+            echo json_encode(array(
+                'status'    => '0',
+                'message'   => $this->security->xss_clean($e->getMessage()),
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+        }
+    }
+
+    public function get_template($id = 0)
+    {
+        $this->output->set_content_type('application/json; charset=utf-8');
+        try {
+            if (empty($this->user_id)) throw new Exception('Unauthorized');
+            $id = (int)$id;
+            if (!$id) throw new Exception('Template id required');
+
+            $row = $this->db->get_where('pro_templates', array('id' => $id, 'user_id' => $this->user_id))->row_array();
+            if (!$row) throw new Exception('Template not found');
+
+            echo json_encode(array(
+                'status'    => '1',
+                'data'      => $row,
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+        } catch (Exception $e) {
+            echo json_encode(array(
+                'status'    => '0',
+                'message'   => $this->security->xss_clean($e->getMessage()),
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+        }
+    }
+
+    public function delete_template_action()
+    {
+        $this->output->set_content_type('application/json; charset=utf-8');
+        try {
+            if (empty($this->user_id)) throw new Exception('Unauthorized');
+
+            $id = (int)$this->input->post('id', true);
+            if (!$id) throw new Exception('Template id required');
+
+            $this->db->where(array('id' => $id, 'user_id' => $this->user_id))->delete('pro_templates');
+            if ($this->db->affected_rows() === 0) throw new Exception('Template not found or not deleted');
+
+            echo json_encode(array(
+                'status'    => '1',
+                'message'   => $this->lang->line('ptm_msg_deleted') ?: 'Template deleted.',
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+        } catch (Exception $e) {
+            echo json_encode(array(
+                'status'    => '0',
+                'message'   => $this->lang->line('ptm_msg_delete_failed') ?: $this->security->xss_clean($e->getMessage()),
+                'csrf_hash' => $this->security->get_csrf_hash()
+            ));
+        }
+    }
+
+    // Save uploaded image and return absolute URL
+    private function save_uploaded_image($file)
+    {
+        if (!isset($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
+            return '';
+        }
+
+        $upload_dir = FCPATH . 'upload/pro_templates/';
+        if (!is_dir($upload_dir)) {
+            @mkdir($upload_dir, 0755, true);
+        }
+
+        $ext = strtolower(pathinfo(isset($file['name']) ? $file['name'] : '', PATHINFO_EXTENSION));
+        if ($ext === '') $ext = 'jpg';
+
+        $rand  = substr(md5(uniqid('', true)), 0, 12);
+        $name  = time() . '_' . $rand . '.' . $ext;
+        $target= $upload_dir . $name;
+
+        if (move_uploaded_file($file['tmp_name'], $target)) {
+            return base_url('upload/pro_templates/' . $name);
+        }
+        return '';
+    }
+
 
     public function estimate_reach()
     {
