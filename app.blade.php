@@ -7,7 +7,7 @@
     <title>@yield('title', $site_settings['site_name'] ?? env('APP_NAME','متجرنا'))</title>
 
     <!-- Tailwind (Dev CDN) - للإنتاج يُفضّل البناء عبر CLI/PostCSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+   @vite(['resources/css/app.css', 'resources/js/app.js'])
 
     <!-- Fonts / Icons -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
