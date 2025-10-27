@@ -6,15 +6,12 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', $site_settings['site_name'] ?? env('APP_NAME','متجرنا'))</title>
 
-    <!-- Tailwind (Dev CDN) - للإنتاج يُفضّل البناء عبر CLI/PostCSS -->
    @vite(['resources/css/app.css', 'resources/js/app.js'])
 
-    <!-- Fonts / Icons -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
-    <!-- AOS CSS -->
     <link href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css" rel="stylesheet">
 
     <style>
@@ -69,10 +66,21 @@
     /* ========== HEADER STYLES ========== */
     .topbar {
         backdrop-filter: saturate(180%) blur(20px);
-        background: rgba(255, 255, 255, 0.92);
+        /* [تعديل] تم إضافة تدرج لوني احترافي للشريط العلوي */
+        background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.88) 100%);
         border-bottom: 1px solid rgba(0, 0, 0, 0.08);
         box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
         transition: all 0.3s ease;
+    }
+    
+    /* [تعديل] تم إضافة ظل للشعار لجعله بارزاً */
+    .header-logo-img {
+        filter: drop-shadow(0 2px 3px rgba(0,0,0,0.08));
+        transition: all 0.2s ease;
+    }
+    .header-logo-img:hover {
+        filter: drop-shadow(0 3px 5px rgba(0,0,0,0.12));
+        transform: scale(1.05);
     }
 
     .topbar.scrolled {
@@ -287,8 +295,9 @@
         }
     }
 
+    /* [تعديل] هذا هو الكود الذي يصلح "الترحيل" من المرة السابقة */
     @media (min-width: 1024px) {
-        main.content {
+        main.content.has-sidebar {
             padding-left: calc(var(--sidebar-width) + 2rem);
         }
     }
@@ -808,18 +817,18 @@
 
 <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:right-2 focus:bg-white focus:text-blue-700 focus:rounded-md focus:px-3 focus:py-2">تخطي إلى المحتوى</a>
 
-<!-- Header -->
 <header class="topbar fixed inset-x-0 top-0 z-50 shadow-sm border-b border-slate-100">
     <div class="container-page">
         <div class="flex items-center justify-between h-16">
-            <!-- Menu + Brand -->
             <div class="flex items-center gap-3">
-                <button @click="sidebarOpen = true" class="md:hidden p-2 rounded-lg text-slate-700 hover:bg-slate-100" aria-label="القائمة">
-                    <i class="fas fa-bars text-xl"></i>
-                </button>
+                @if(!request()->routeIs('home'))
+                    <button @click="sidebarOpen = true" class="md:hidden p-2 rounded-lg text-slate-700 hover:bg-slate-100" aria-label="القائمة">
+                        <i class="fas fa-bars text-xl"></i>
+                    </button>
+                @endif
                 <a href="{{ route('home') }}" class="flex items-center gap-3">
                     <div class="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm overflow-hidden ring-1 ring-slate-100">
-                        <img src="{{ $logoUrl }}" alt="logo" class="w-full h-full object-cover" onerror="this.onerror=null;this.src='{{ asset('storage/images/default-logo.png') }}'">
+                        <img src="{{ $logoUrl }}" alt="logo" class="w-full h-full object-cover header-logo-img" onerror="this.onerror=null;this.src='{{ asset('storage/images/default-logo.png') }}'">
                     </div>
                     <div class="hidden sm:block">
                         <div class="text-base md:text-lg font-extrabold text-slate-800">{{ $site_settings['site_name'] ?? config('app.name') }}</div>
@@ -828,14 +837,12 @@
                 </a>
             </div>
 
-            <!-- Search (desktop) -->
             <form action="{{ route('products.index') }}" method="GET" class="hidden md:flex items-center bg-slate-100 rounded-full px-3 py-1.5 w-96 max-w-[45vw] ring-1 ring-transparent focus-within:ring-blue-500">
                 <i class="fas fa-search text-slate-400"></i>
                 <input name="q" class="bg-transparent outline-none px-2 text-sm text-slate-700 placeholder-slate-400 w-full" placeholder="ابحث عن منتج..." value="{{ request('q') }}">
                 <button class="text-slate-500 px-1.5 hover:text-blue-600" aria-label="بحث"><i class="fas fa-arrow-left"></i></button>
             </form>
 
-            <!-- Actions -->
             <div class="flex items-center gap-2 sm:gap-4">
                 <button @click="searchOpen = true" class="md:hidden p-2 rounded-lg text-slate-700 hover:bg-slate-100" aria-label="بحث">
                     <i class="fas fa-search text-lg"></i>
@@ -878,7 +885,6 @@
         </div>
     </div>
 
-    <!-- Mobile bottom bar -->
     <nav class="mobile-nav md:hidden">
         <div class="flex items-center justify-between container-page">
             <a href="{{ route('home') }}" class="{{ request()->routeIs('home') ? 'active' : '' }}">
@@ -913,7 +919,6 @@
     </nav>
 </header>
 
-<!-- Mobile search sheet -->
 <div class="fixed inset-0 bg-black/30 backdrop-blur-sm z-40 hidden" :class="searchOpen ? 'block' : 'hidden'" @click.self="searchOpen=false">
     <div class="container-page pt-[72px]">
         <form action="{{ route('products.index') }}" method="GET" class="w-full bg-white border border-slate-200 rounded-2xl shadow-xl p-3">
@@ -928,12 +933,12 @@
 
 <div class="flex pt-16">
     @if(!request()->routeIs('home'))
-        <!-- Sidebar overlay (mobile) -->
         <div class="fixed inset-0 bg-black/30 backdrop-blur-sm z-40 md:hidden" x-show="sidebarOpen" x-cloak @click="sidebarOpen=false"></div>
 
-        <aside class="app-sidebar fixed inset-y-0 right-0 z-50 transform transition-transform duration-200 ease-in-out md:translate-x-0 md:static md:block"
+        <aside class="app-sidebar fixed inset-y-0 right-0 z-50 transform transition-transform duration-200 ease-in-out md:translate-x-0 md:static md:block flex flex-col"
                :class="sidebarOpen ? 'translate-x-0' : 'translate-x-full md:translate-x-0'">
-            <div class="h-16 flex items-center justify-between px-4 border-b border-slate-100">
+            
+            <div class="h-16 flex items-center justify-between px-4 border-b border-slate-100 flex-shrink-0">
                 <div class="flex items-center gap-3">
                     <img src="{{ $logoUrl }}" alt="logo" class="w-10 h-10 rounded-full object-cover ring-1 ring-slate-100" onerror="this.onerror=null;this.src='{{ asset('storage/images/default-logo.png') }}'">
                     <div>
@@ -946,7 +951,7 @@
                 </button>
             </div>
 
-            <nav class="px-3 py-4 sidebar-scroll overflow-y-auto" style="height: calc(100vh - 64px);">
+            <nav class="flex-1 px-3 py-4 sidebar-scroll overflow-y-auto">
                 <a href="{{ route('home') }}" class="sidebar-link {{ request()->routeIs('home') ? 'sidebar-active' : '' }}">
                     <i class="fas fa-home text-lg w-5"></i><span class="text-sm">الرئيسية</span>
                 </a>
@@ -997,15 +1002,13 @@
         </aside>
     @endif
 
-    <!-- Content -->
     <div class="flex-1 min-h-screen">
-        <main id="main" class="content">
+        <main id="main" class="content @if(!request()->routeIs('home')) has-sidebar @endif">
             <div class="container-page py-6 md:py-8">
                 @yield('content')
             </div>
         </main>
 
-        <!-- Footer -->
         <footer class="bg-slate-900 text-white mt-20 pb-24 md:pb-0">
             <div class="container-page py-12">
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -1054,7 +1057,6 @@
     </div>
 </div>
 
-<!-- Alpine -->
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 
 <script>
@@ -1135,7 +1137,6 @@
     }
 </script>
 
-<!-- AOS -->
 <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', function() {
