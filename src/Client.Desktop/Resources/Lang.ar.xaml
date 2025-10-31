@@ -1,0 +1,28 @@
+<!-- Arabic (RTL) Language Resources -->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+    
+    <!-- Application Strings -->
+    <sys:String x:Key="AppTitle">متجر موبايل وإكسسوارات</sys:String>
+    <sys:String x:Key="Login">تسجيل الدخول</sys:String>
+    <sys:String x:Key="Username">اسم المستخدم</sys:String>
+    <sys:String x:Key="Password">كلمة المرور</sys:String>
+    <sys:String x:Key="Welcome">مرحباً</sys:String>
+    <sys:String x:Key="Products">المنتجات</sys:String>
+    <sys:String x:Key="Categories">الفئات</sys:String>
+    <sys:String x:Key="Language">اللغة</sys:String>
+    <sys:String x:Key="MainWindow">النافذة الرئيسية</sys:String>
+    <sys:String x:Key="LoggedIn">تم تسجيل الدخول بنجاح</sys:String>
+    <sys:String x:Key="FetchingProducts">جاري تحميل المنتجات...</sys:String>
+    <sys:String x:Key="Exit">خروج</sys:String>
+    <sys:String x:Key="Price">السعر</sys:String>
+    <sys:String x:Key="Stock">المخزون</sys:String>
+    <sys:String x:Key="Description">الوصف</sys:String>
+    <sys:String x:Key="Name">الاسم</sys:String>
+    <sys:String x:Key="ID">الرقم التعريفي</sys:String>
+    
+    <!-- UI Direction -->
+    <FlowDirection x:Key="FlowDirection">RightToLeft</FlowDirection>
+    
+</ResourceDictionary>

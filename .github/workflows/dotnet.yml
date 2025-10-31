@@ -1,0 +1,46 @@
+name: .NET Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+        
+    - name: Restore dependencies
+      run: dotnet restore
+      
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+      
+    - name: Test
+      run: dotnet test --no-build --configuration Release --verbosity normal
+      
+    - name: Publish Server.Api
+      run: dotnet publish src/Server.Api/Server.Api.csproj --no-build --configuration Release --output ./publish/api
+      
+    - name: Publish Client.Desktop
+      run: dotnet publish src/Client.Desktop/Client.Desktop.csproj --no-build --configuration Release --output ./publish/desktop
+      
+    - name: Upload API Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: server-api
+        path: ./publish/api
+        
+    - name: Upload Desktop Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: client-desktop
+        path: ./publish/desktop
