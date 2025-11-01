@@ -6,7 +6,7 @@
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', $site_settings['site_name'] ?? env('APP_NAME','متجرنا'))</title>
 
-   @vite(['resources/css/app.css', 'resources/js/app.js'])
+    @vite(['resources/css/app.css', 'resources/js/app.js'])
 
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap" rel="stylesheet">
@@ -32,48 +32,33 @@
         --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
         --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
     }
-
     * {
         font-family: 'Cairo', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         box-sizing: border-box;
     }
-
     html {
         scroll-behavior: smooth;
         -webkit-text-size-adjust: 100%;
     }
-
-    html, body {
-        height: 100%;
-        margin: 0;
-        padding: 0;
-    }
-
+    html, body { height: 100%; margin: 0; padding: 0; }
     body {
         background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
         color: #0f172a;
         line-height: 1.6;
         overflow-x: hidden;
     }
-
-    /* Safe area for mobile */
     .safe-area {
         padding-left: env(safe-area-inset-left);
         padding-right: env(safe-area-inset-right);
         padding-bottom: env(safe-area-inset-bottom);
     }
-
-    /* ========== HEADER STYLES ========== */
     .topbar {
         backdrop-filter: saturate(180%) blur(20px);
-        /* [تعديل] تم إضافة تدرج لوني احترافي للشريط العلوي */
         background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.88) 100%);
         border-bottom: 1px solid rgba(0, 0, 0, 0.08);
         box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
         transition: all 0.3s ease;
     }
-    
-    /* [تعديل] تم إضافة ظل للشعار لجعله بارزاً */
     .header-logo-img {
         filter: drop-shadow(0 2px 3px rgba(0,0,0,0.08));
         transition: all 0.2s ease;
@@ -82,687 +67,333 @@
         filter: drop-shadow(0 3px 5px rgba(0,0,0,0.12));
         transform: scale(1.05);
     }
-
     .topbar.scrolled {
         background: rgba(255, 255, 255, 0.98);
         box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
     }
-
-    /* Logo animation */
-    .logo-container {
-        position: relative;
-        transition: transform 0.3s ease;
-    }
-
-    .logo-container:hover {
-        transform: scale(1.05) rotate(-2deg);
-    }
-
+    .logo-container { position: relative; transition: transform 0.3s ease; }
+    .logo-container:hover { transform: scale(1.05) rotate(-2deg); }
     .logo-container::after {
-        content: '';
-        position: absolute;
-        inset: -3px;
+        content: ''; position: absolute; inset: -3px;
         background: linear-gradient(45deg, var(--primary), var(--secondary));
-        border-radius: 50%;
-        opacity: 0;
-        z-index: -1;
+        border-radius: 50%; opacity: 0; z-index: -1;
         transition: opacity 0.3s ease;
     }
-
-    .logo-container:hover::after {
-        opacity: 0.3;
-        animation: pulse 2s infinite;
-    }
-
-    /* Search bar enhancement */
-    .search-bar {
-        transition: all 0.3s ease;
-    }
-
+    .logo-container:hover::after { opacity: 0.3; animation: pulse 2s infinite; }
+    .search-bar { transition: all 0.3s ease; }
     .search-bar:focus-within {
         box-shadow: 0 8px 24px rgba(37, 99, 235, 0.15);
         transform: translateY(-2px);
     }
-
-    /* ========== SIDEBAR STYLES ========== */
     .app-sidebar {
         width: var(--sidebar-width);
         background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
         border-left: 1px solid rgba(0, 0, 0, 0.06);
         box-shadow: 4px 0 24px rgba(0, 0, 0, 0.04);
     }
-
     .sidebar-link {
-        display: flex;
-        align-items: center;
-        gap: 0.85rem;
-        padding: 0.75rem 1rem;
-        border-radius: var(--radius-md);
-        color: #475569;
-        text-decoration: none;
-        font-weight: 600;
-        font-size: 0.9rem;
-        transition: all 0.2s ease;
-        position: relative;
-        overflow: hidden;
+        display: flex; align-items: center; gap: 0.85rem;
+        padding: 0.75rem 1rem; border-radius: var(--radius-md);
+        color: #475569; text-decoration: none; font-weight: 600;
+        font-size: 0.9rem; transition: all 0.2s ease;
+        position: relative; overflow: hidden;
     }
-
     .sidebar-link::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 0;
-        bottom: 0;
-        width: 4px;
-        background: var(--primary);
-        transform: scaleY(0);
-        transition: transform 0.2s ease;
+        content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+        width: 4px; background: var(--primary);
+        transform: scaleY(0); transition: transform 0.2s ease;
     }
-
     .sidebar-link:hover {
         background: linear-gradient(90deg, rgba(37, 99, 235, 0.08), transparent);
         color: var(--primary-dark);
         transform: translateX(-4px);
     }
-
-    .sidebar-link:hover::before {
-        transform: scaleY(1);
-    }
-
+    .sidebar-link:hover::before { transform: scaleY(1); }
     .sidebar-active {
         background: linear-gradient(90deg, rgba(37, 99, 235, 0.12), rgba(124, 58, 237, 0.08));
         color: var(--primary);
         box-shadow: 0 4px 16px rgba(37, 99, 235, 0.15);
         font-weight: 700;
     }
-
-    .sidebar-active::before {
-        transform: scaleY(1);
-    }
-
-    .sidebar-scroll::-webkit-scrollbar {
-        width: 6px;
-    }
-
-    .sidebar-scroll::-webkit-scrollbar-track {
-        background: transparent;
-    }
-
+    .sidebar-active::before { transform: scaleY(1); }
+    .sidebar-scroll::-webkit-scrollbar { width: 6px; }
+    .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
     .sidebar-scroll::-webkit-scrollbar-thumb {
-        background: rgba(15, 23, 42, 0.15);
-        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.15); border-radius: 8px;
     }
-
-    .sidebar-scroll::-webkit-scrollbar-thumb:hover {
-        background: rgba(15, 23, 42, 0.25);
-    }
-
-    /* ========== MOBILE NAVIGATION ========== */
+    .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(15, 23, 42, 0.25); }
     .mobile-nav {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        z-index: 60;
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 60;
         background: rgba(255, 255, 255, 0.98);
         backdrop-filter: blur(20px);
         border-top: 1px solid rgba(0, 0, 0, 0.08);
         box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.08);
         padding: 0.5rem 0;
     }
-
     .mobile-nav a {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.25rem;
-        padding: 0.6rem 0.25rem;
-        color: #64748b;
-        text-decoration: none;
-        font-size: 0.7rem;
-        font-weight: 600;
-        transition: all 0.2s ease;
-        position: relative;
+        flex: 1; display: flex; flex-direction: column;
+        align-items: center; gap: 0.25rem;
+        padding: 0.6rem 0.25rem; color: #64748b;
+        text-decoration: none; font-size: 0.7rem; font-weight: 600;
+        transition: all 0.2s ease; position: relative;
     }
-
-    .mobile-nav a i {
-        font-size: 1.25rem;
-        transition: all 0.2s ease;
-    }
-
-    .mobile-nav a.active {
-        color: var(--primary);
-    }
-
-    .mobile-nav a.active i {
-        transform: scale(1.15);
-    }
-
+    .mobile-nav a i { font-size: 1.25rem; transition: all 0.2s ease; }
+    .mobile-nav a.active { color: var(--primary); }
+    .mobile-nav a.active i { transform: scale(1.15); }
     .mobile-nav a::before {
-        content: '';
-        position: absolute;
-        top: -2px;
-        left: 50%;
+        content: ''; position: absolute; top: -2px; left: 50%;
         transform: translateX(-50%) scaleX(0);
-        width: 40px;
-        height: 3px;
-        background: var(--primary);
+        width: 40px; height: 3px; background: var(--primary);
         border-radius: 0 0 4px 4px;
         transition: transform 0.2s ease;
     }
-
-    .mobile-nav a.active::before {
-        transform: translateX(-50%) scaleX(1);
-    }
-
-    /* ========== BADGES ========== */
+    .mobile-nav a.active::before { transform: translateX(-50%) scaleX(1); }
     .badge {
         background: linear-gradient(135deg, var(--danger) 0%, #dc2626 100%);
-        color: #fff;
-        border-radius: 999px;
-        padding: 0 6px;
-        font-size: 10px;
-        line-height: 18px;
-        min-width: 18px;
-        text-align: center;
-        font-weight: 700;
+        color: #fff; border-radius: 999px; padding: 0 6px;
+        font-size: 10px; line-height: 18px; min-width: 18px;
+        text-align: center; font-weight: 700;
         box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
         animation: badge-pulse 2s infinite;
     }
-
     @keyframes badge-pulse {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
     }
-
-    /* ========== CONTAINERS ========== */
     .container-page {
-        max-width: 1400px;
-        margin-inline: auto;
-        padding-inline: 1.25rem;
+        max-width: 1400px; margin-inline: auto; padding-inline: 1.25rem;
     }
-
-    @media (min-width: 640px) {
-        .container-page {
-            padding-inline: 1.5rem;
-        }
-    }
-
     @media (min-width: 1024px) {
-        .container-page {
-            padding-inline: 2rem;
-        }
+    /* Use logical property so it works with RTL (sidebar on the right) and LTR */
+    main.content.has-sidebar {
+        /* padding-inline-end affects right padding in RTL, left padding in LTR */
+        padding-inline-end: calc(var(--sidebar-width) + 2rem);
+        /* keep a fallback for older browsers */
+        padding-right: calc(var(--sidebar-width) + 2rem);
     }
-
-    /* [تعديل] هذا هو الكود الذي يصلح "الترحيل" من المرة السابقة */
-    @media (min-width: 1024px) {
-        main.content.has-sidebar {
-            padding-left: calc(var(--sidebar-width) + 2rem);
-        }
-    }
-
-    /* ========== BUTTONS & CHIPS ========== */
+}
     .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.6rem 1rem;
-        border-radius: 999px;
-        background: #f1f5f9;
-        color: #1f2937;
-        font-weight: 700;
-        font-size: 0.85rem;
-        transition: all 0.2s ease;
-        white-space: nowrap;
-        border: 2px solid transparent;
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        padding: 0.6rem 1rem; border-radius: 999px;
+        background: #f1f5f9; color: #1f2937; font-weight: 700;
+        font-size: 0.85rem; transition: all 0.2s ease;
+        white-space: nowrap; border: 2px solid transparent;
     }
-
     .chip:hover {
-        background: #e2e8f0;
-        transform: translateY(-2px);
+        background: #e2e8f0; transform: translateY(-2px);
         box-shadow: var(--shadow-md);
     }
-
     .chip.is-active {
         background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
-        color: #fff;
-        box-shadow: 0 8px 24px rgba(37, 99, 235, 0.3);
+        color: #fff; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.3);
         border-color: var(--primary);
     }
-
     .chip-select {
-        padding: 0.55rem 0.9rem;
-        border-radius: 999px;
-        background: #ffffff;
-        border: 2px solid #e5e7eb;
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: #374151;
-        transition: all 0.2s ease;
-        cursor: pointer;
+        padding: 0.55rem 0.9rem; border-radius: 999px;
+        background: #ffffff; border: 2px solid #e5e7eb;
+        font-size: 0.85rem; font-weight: 600; color: #374151;
+        transition: all 0.2s ease; cursor: pointer;
     }
-
     .chip-select:hover {
-        border-color: var(--primary);
-        box-shadow: var(--shadow-md);
+        border-color: var(--primary); box-shadow: var(--shadow-md);
     }
-
     .chip-select:focus {
-        outline: none;
-        border-color: var(--primary);
+        outline: none; border-color: var(--primary);
         box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
     }
-
-    /* ========== CARDS & PRODUCT ITEMS ========== */
     .product-card {
-        background: #ffffff;
-        border-radius: var(--radius-lg);
-        overflow: hidden;
-        box-shadow: var(--shadow-sm);
+        background: #ffffff; border-radius: var(--radius-lg);
+        overflow: hidden; box-shadow: var(--shadow-sm);
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         border: 1px solid rgba(0, 0, 0, 0.04);
     }
-
     .product-card:hover {
         transform: translateY(-8px) scale(1.02);
         box-shadow: 0 24px 48px rgba(0, 0, 0, 0.12);
         border-color: rgba(37, 99, 235, 0.2);
     }
-
     .product-image-wrapper {
-        position: relative;
-        overflow: hidden;
-        padding-top: 100%;
+        position: relative; overflow: hidden; padding-top: 100%;
         background: linear-gradient(135deg, #f1f5f9, #e2e8f0);
     }
-
     .product-image {
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         object-fit: cover;
         transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     }
-
-    .product-card:hover .product-image {
-        transform: scale(1.1);
-    }
-
+    .product-card:hover .product-image { transform: scale(1.1); }
     .product-badge {
-        position: absolute;
-        top: 12px;
-        right: 12px;
+        position: absolute; top: 12px; right: 12px;
         background: linear-gradient(135deg, var(--danger), #dc2626);
-        color: white;
-        padding: 0.4rem 0.8rem;
-        border-radius: 999px;
-        font-size: 0.75rem;
-        font-weight: 700;
+        color: white; padding: 0.4rem 0.8rem; border-radius: 999px;
+        font-size: 0.75rem; font-weight: 700;
         box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
         animation: badge-bounce 2s infinite;
     }
-
     @keyframes badge-bounce {
         0%, 100% { transform: translateY(0); }
         50% { transform: translateY(-4px); }
     }
-
-    .product-info {
-        padding: 1.25rem;
-    }
-
+    .product-info { padding: 1.25rem; }
     .product-title {
-        font-size: 1rem;
-        font-weight: 700;
-        color: #1e293b;
-        margin-bottom: 0.5rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        transition: color 0.2s ease;
+        font-size: 1rem; font-weight: 700; color: #1e293b;
+        margin-bottom: 0.5rem; overflow: hidden; text-overflow: ellipsis;
+        display: -webkit-box; -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical; transition: color 0.2s ease;
     }
-
-    .product-card:hover .product-title {
-        color: var(--primary);
-    }
-
+    .product-card:hover .product-title { color: var(--primary); }
     .rating-stars {
-        color: #fbbf24;
-        font-size: 0.9rem;
-        display: flex;
-        gap: 0.15rem;
+        color: #fbbf24; font-size: 0.9rem; display: flex; gap: 0.15rem;
     }
-
     .price-wrapper {
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-        margin-top: 0.75rem;
-        flex-wrap: wrap;
+        display: flex; align-items: center; gap: 0.75rem;
+        margin-top: 0.75rem; flex-wrap: wrap;
     }
-
     .price-current {
-        font-size: 1.5rem;
-        font-weight: 800;
-        color: var(--success);
+        font-size: 1.5rem; font-weight: 800; color: var(--success);
     }
-
     .price-old {
-        font-size: 1rem;
-        color: #94a3b8;
-        text-decoration: line-through;
+        font-size: 1rem; color: #94a3b8; text-decoration: line-through;
     }
-
     .discount-badge {
         background: linear-gradient(135deg, #fecaca, #fca5a5);
-        color: #991b1b;
-        padding: 0.25rem 0.6rem;
-        border-radius: 999px;
-        font-size: 0.7rem;
-        font-weight: 700;
+        color: #991b1b; padding: 0.25rem 0.6rem; border-radius: 999px;
+        font-size: 0.7rem; font-weight: 700;
     }
-
     .btn-primary {
         background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-        color: white;
-        padding: 0.75rem 1.5rem;
-        border-radius: var(--radius-md);
-        border: none;
-        font-weight: 700;
-        font-size: 0.9rem;
-        cursor: pointer;
-        transition: all 0.3s ease;
+        color: white; padding: 0.75rem 1.5rem;
+        border-radius: var(--radius-md); border: none; font-weight: 700;
+        font-size: 0.9rem; cursor: pointer; transition: all 0.3s ease;
         box-shadow: 0 4px 16px rgba(37, 99, 235, 0.3);
-        position: relative;
-        overflow: hidden;
+        position: relative; overflow: hidden;
     }
-
     .btn-primary::before {
-        content: '';
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 0;
-        height: 0;
-        border-radius: 50%;
+        content: ''; position: absolute; top: 50%; left: 50%;
+        width: 0; height: 0; border-radius: 50%;
         background: rgba(255, 255, 255, 0.3);
         transform: translate(-50%, -50%);
         transition: width 0.6s, height 0.6s;
     }
-
-    .btn-primary:hover::before {
-        width: 300px;
-        height: 300px;
-    }
-
+    .btn-primary:hover::before { width: 300px; height: 300px; }
     .btn-primary:hover {
         transform: translateY(-3px);
         box-shadow: 0 12px 32px rgba(37, 99, 235, 0.4);
     }
-
-    .btn-primary:active {
-        transform: translateY(-1px);
-    }
-
+    .btn-primary:active { transform: translateY(-1px); }
     .btn-secondary {
-        background: #f1f5f9;
-        color: #334155;
-        padding: 0.75rem 1.5rem;
-        border-radius: var(--radius-md);
-        border: 2px solid #e2e8f0;
-        font-weight: 700;
-        font-size: 0.9rem;
-        cursor: pointer;
-        transition: all 0.2s ease;
+        background: #f1f5f9; color: #334155;
+        padding: 0.75rem 1.5rem; border-radius: var(--radius-md);
+        border: 2px solid #e2e8f0; font-weight: 700;
+        font-size: 0.9rem; cursor: pointer; transition: all 0.2s ease;
     }
-
     .btn-secondary:hover {
-        background: #e2e8f0;
-        border-color: var(--primary);
-        color: var(--primary);
-        transform: translateY(-2px);
+        background: #e2e8f0; border-color: var(--primary);
+        color: var(--primary); transform: translateY(-2px);
     }
-
-    /* ========== FOOTER ENHANCEMENT ========== */
     footer {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        position: relative;
-        overflow: hidden;
+        position: relative; overflow: hidden;
     }
-
     footer::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
+        content: ''; position: absolute; top: 0; left: 0; right: 0;
         height: 1px;
         background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
     }
-
-    footer h3 {
-        position: relative;
-        display: inline-block;
-    }
-
+    footer h3 { position: relative; display: inline-block; }
     footer h3::after {
-        content: '';
-        position: absolute;
-        bottom: -8px;
-        left: 0;
-        width: 40px;
-        height: 3px;
+        content: ''; position: absolute; bottom: -8px; left: 0;
+        width: 40px; height: 3px;
         background: linear-gradient(90deg, var(--accent), var(--primary));
         border-radius: 999px;
     }
-
-    footer a {
-        transition: all 0.2s ease;
-        display: inline-block;
-    }
-
+    footer a { transition: all 0.2s ease; display: inline-block; }
     footer a:hover {
-        transform: translateX(-4px);
-        color: var(--accent) !important;
+        transform: translateX(-4px); color: var(--accent) !important;
     }
-
-    /* ========== ANIMATIONS ========== */
     @keyframes pulse {
         0%, 100% { opacity: 0.3; transform: scale(1); }
         50% { opacity: 0.5; transform: scale(1.05); }
     }
-
     @keyframes fadeInUp {
-        from {
-            opacity: 0;
-            transform: translateY(30px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+        from { opacity: 0; transform: translateY(30px); }
+        to { opacity: 1; transform: translateY(0); }
     }
-
     @keyframes slideInRight {
-        from {
-            transform: translateX(100%);
-        }
-        to {
-            transform: translateX(0);
-        }
+        from { transform: translateX(100%); }
+        to { transform: translateX(0); }
     }
-
-    .animate-fade-in-up {
-        animation: fadeInUp 0.6s ease-out;
-    }
-
-    /* ========== TOAST NOTIFICATIONS ========== */
-    .toast {
-        position: fixed;
-        top: 1rem;
-        right: 1rem;
-        z-index: 100;
-        min-width: 300px;
-        max-width: 500px;
-        padding: 1rem 1.25rem;
-        border-radius: var(--radius-lg);
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
-        backdrop-filter: blur(10px);
-        animation: slideInRight 0.3s ease-out;
-        display: flex;
-        align-items: center;
-        gap: 0.75rem;
-    }
-
-    .toast.success {
-        background: linear-gradient(135deg, #10b981, #059669);
-        color: white;
-    }
-
-    .toast.error {
-        background: linear-gradient(135deg, #ef4444, #dc2626);
-        color: white;
-    }
-
-    .toast.info {
-        background: linear-gradient(135deg, #3b82f6, #2563eb);
-        color: white;
-    }
-
-    /* ========== FORM INPUTS ========== */
-    input[type="text"],
-    input[type="email"],
-    input[type="password"],
-    input[type="search"],
-    textarea,
-    select {
-        width: 100%;
-        padding: 0.75rem 1rem;
-        border: 2px solid #e2e8f0;
-        border-radius: var(--radius-md);
-        font-size: 0.95rem;
-        transition: all 0.2s ease;
+    .animate-fade-in-up { animation: fadeInUp 0.6s ease-out; }
+    input[type="text"], input[type="email"], input[type="password"],
+    input[type="search"], textarea, select {
+        width: 100%; padding: 0.75rem 1rem;
+        border: 2px solid #e2e8f0; border-radius: var(--radius-md);
+        font-size: 0.95rem; transition: all 0.2s ease;
         background: white;
     }
-
-    input:focus,
-    textarea:focus,
-    select:focus {
-        outline: none;
-        border-color: var(--primary);
+    input:focus, textarea:focus, select:focus {
+        outline: none; border-color: var(--primary);
         box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
     }
-
-    /* ========== GRID LAYOUTS ========== */
     .grid-products {
-        display: grid;
-        gap: 1.5rem;
+        display: grid; gap: 1.5rem;
         grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     }
-
     @media (max-width: 640px) {
         .grid-products {
             grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
             gap: 1rem;
         }
     }
-
-    /* ========== RESPONSIVE UTILITIES ========== */
-    .no-scrollbar::-webkit-scrollbar {
-        display: none;
-    }
-
+    .no-scrollbar::-webkit-scrollbar { display: none; }
     .no-scrollbar {
-        -ms-overflow-style: none;
-        scrollbar-width: none;
+        -ms-overflow-style: none; scrollbar-width: none;
     }
-
-    /* Hide scrollbar on mobile */
     @media (max-width: 768px) {
-        body::-webkit-scrollbar {
-            display: none;
-        }
+        body::-webkit-scrollbar { display: none; }
     }
-
-    /* ========== LOADING STATES ========== */
     .skeleton {
         background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
         background-size: 200% 100%;
         animation: loading 1.5s infinite;
     }
-
     @keyframes loading {
         0% { background-position: 200% 0; }
         100% { background-position: -200% 0; }
     }
-
-    /* ========== ACCESSIBILITY ========== */
     .sr-only:not(:focus):not(:active) {
-        clip: rect(0 0 0 0);
-        clip-path: inset(50%);
-        height: 1px;
-        overflow: hidden;
-        position: absolute;
-        white-space: nowrap;
-        width: 1px;
+        clip: rect(0 0 0 0); clip-path: inset(50%);
+        height: 1px; overflow: hidden; position: absolute;
+        white-space: nowrap; width: 1px;
     }
-
-    /* ========== DARK MODE SUPPORT (Optional) ========== */
     @media (prefers-color-scheme: dark) {
         body {
             background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
             color: #f1f5f9;
         }
-
         .topbar {
             background: rgba(15, 23, 42, 0.92);
             border-bottom-color: rgba(255, 255, 255, 0.08);
         }
-
         .app-sidebar {
             background: linear-gradient(180deg, #1e293b, #0f172a);
             border-left-color: rgba(255, 255, 255, 0.08);
         }
-
-        .sidebar-link {
-            color: #cbd5e1;
-        }
-
+        .sidebar-link { color: #cbd5e1; }
         .sidebar-link:hover {
-            background: rgba(59, 130, 246, 0.15);
-            color: #93c5fd;
+            background: rgba(59, 130, 246, 0.15); color: #93c5fd;
         }
-
         .product-card {
             background: #1e293b;
             border-color: rgba(255, 255, 255, 0.08);
         }
-
-        .product-title {
-            color: #f1f5f9;
-        }
+        .product-title { color: #f1f5f9; }
     }
-
-    /* ========== PRINT STYLES ========== */
     @media print {
-        .topbar,
-        .app-sidebar,
-        .mobile-nav,
-        footer {
-            display: none;
-        }
-
-        main.content {
-            padding-left: 0;
-        }
+        .topbar, .app-sidebar, .mobile-nav, footer { display: none; }
+        main.content { padding-left: 0; }
     }
-</style>
-
+    </style>
     @stack('styles')
 </head>
 <body class="safe-area antialiased" x-data="{ sidebarOpen:false, searchOpen:false }" @keydown.window.escape="sidebarOpen=false; searchOpen=false">
@@ -770,7 +401,6 @@
 @php
     use Illuminate\Support\Str;
     use Illuminate\Support\Facades\Storage;
-
     $user = auth()->user();
 
     // Logo
@@ -791,6 +421,8 @@
             $avatarUrl = $ua;
         } elseif (Storage::disk('public')->exists(ltrim($ua, '/'))) {
             $avatarUrl = asset('storage/' . ltrim($ua, '/'));
+        } elseif (file_exists(public_path(ltrim($ua, '/')))) {
+            $avatarUrl = asset(ltrim($ua, '/'));
         }
     } elseif (!empty($site_settings_urls['avatar'])) {
         $sa = $site_settings_urls['avatar'];
@@ -798,14 +430,16 @@
             $avatarUrl = $sa;
         } elseif (Storage::disk('public')->exists(ltrim($sa, '/'))) {
             $avatarUrl = asset('storage/' . ltrim($sa, '/'));
+        } elseif (file_exists(public_path(ltrim($sa, '/')))) {
+            $avatarUrl = asset(ltrim($sa, '/'));
         }
     }
 
-    // Currency
-    $currency = $site_settings['currency'] ?? \App\Models\Setting::getValue('currency') ?? 'EGP';
-    $currencyRate = (float) ($site_settings['currency_rate'] ?? \App\Models\Setting::getValue('currency_rate') ?? 1);
-    if ($currencyRate <= 0) $currencyRate = 1.0;
-    $currencySymbol = $currency === 'EGP' ? 'ج.م' : ($currency === 'USD' ? '$' : $currency);
+    // Force currency to Egyptian Pound (EGP)
+    // This will make all pages show prices as "ج.م" and JS window.AppCurrency.rate = 1
+    $currency = 'EGP';
+    $currencyRate = 1.0;
+    $currencySymbol = 'ج.م';
 
     // Cart count
     $cart = session('cart', []);
@@ -976,7 +610,7 @@
                         <a href="{{ route('dashboard') }}" class="sidebar-link {{ request()->routeIs('dashboard') ? 'sidebar-active' : '' }}">
                             <i class="fas fa-tachometer-alt text-lg w-5"></i><span class="text-sm">لوحة التحكم</span>
                         </a>
-                                         <a href="{{ route('shippings.index') }}" class="sidebar-link {{ request()->is('shippings*') ? 'sidebar-active' : '' }}">
+                         <a href="{{ route('shippings.index') }}" class="sidebar-link {{ request()->is('shippings*') ? 'sidebar-active' : '' }}">
                             <i class="fas fa-users-cog text-lg w-5"></i><span class="text-sm">اعدادات الشحن</span>
                         </a>
                         <a href="{{ route('users.index') }}" class="sidebar-link {{ request()->is('users*') ? 'sidebar-active' : '' }}">
@@ -1004,9 +638,7 @@
 
     <div class="flex-1 min-h-screen">
         <main id="main" class="content @if(!request()->routeIs('home')) has-sidebar @endif">
-            <div class="container-page py-6 md:py-8">
-                @yield('content')
-            </div>
+            @yield('content')
         </main>
 
         <footer class="bg-slate-900 text-white mt-20 pb-24 md:pb-0">
@@ -1067,6 +699,7 @@
     };
 
     // Cart badges sync
+    // [تعديل] تم الإبقاء على دالة updateCartBadges لأن صفحة المنتجات تعتمد عليها
     function updateCartBadges(count){
         document.querySelectorAll('#cart-count, #cart-count-2').forEach(e => e && (e.textContent = count));
         localStorage.setItem('cart_count', count);
@@ -1074,7 +707,9 @@
     document.addEventListener('DOMContentLoaded', function(){
         const serverCount = parseInt("{{ $cartServerCount ?? 0 }}") || 0;
         const localCount = parseInt(localStorage.getItem('cart_count')) || 0;
-        updateCartBadges(serverCount > 0 ? serverCount : localCount);
+        if(typeof updateCartBadges === 'function'){
+            updateCartBadges(serverCount > 0 ? serverCount : localCount);
+        }
     });
 
     // AJAX helper
@@ -1095,38 +730,11 @@
         return ct.includes('application/json') ? res.json() : { html: await res.text(), status: res.status };
     }
 
-    // Add-to-cart convenience
-    async function addToCartAjax(productId, quantity = 1) {
-        try{
-            const data = await ajaxPostJson('/cart/add', { product_id: productId, quantity });
-            if (data && data.success) {
-                const newCount = data.cart_count ?? (parseInt(localStorage.getItem('cart_count')||'0') + quantity);
-                updateCartBadges(newCount);
-                showToast(data.message || 'تم إضافة المنتج إلى السلة', 'success');
-                return data;
-            } else if (data && data.error) {
-                showToast(data.error, 'error'); return data;
-            } else if (data && data.html) {
-                location.reload(); return data;
-            } else {
-                showToast('استجابة غير متوقعة', 'error');
-            }
-        } catch(e){
-            console.error(e); showToast('حدث خطأ في الشبكة', 'error');
-        }
-    }
+    // [تعديل] تم حذف دالة addToCartAjax من هنا لمنع التعارض
+    // سيتم استخدام الدالة الموجودة في صفحة المنتجات
 
-    // Toast
-    function showToast(message, type='info'){
-        const el = document.createElement('div');
-        el.className = `fixed top-4 right-4 z-[70] px-4 py-3 rounded-xl shadow-xl text-white transition-all duration-300 translate-x-full
-            ${type==='success'?'bg-emerald-600':type==='error'?'bg-rose-600':'bg-blue-600'}`;
-        el.innerHTML = `<div class="flex items-center gap-2"><i class="fas ${type==='success'?'fa-check-circle':type==='error'?'fa-exclamation-circle':'fa-info-circle'}"></i><span>${message}</span></div>`;
-        document.body.appendChild(el);
-        requestAnimationFrame(()=> el.style.transform='translateX(0)');
-        setTimeout(()=>{ el.style.transform='translateX(120%)'; setTimeout(()=>el.remove(), 240); }, 2600);
-    }
-
+    // [تعديل] تم حذف دالة showToast()
+    
     // Service worker (register only if exists)
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', function() {
