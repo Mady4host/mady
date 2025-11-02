@@ -30,81 +30,139 @@ class Social_accounts extends Home
     }
   
     public function account_import()
-    {
-        $this->is_group_posting_exist=$this->group_posting_exist();
-        $data['body'] = 'facebook_rx/account_import';
-        $data['page_title'] = $this->lang->line('Facebook Account Import');
+{
+    $this->is_group_posting_exist = $this->group_posting_exist();
+    $data['body'] = 'facebook_rx/account_import';
+    $data['page_title'] = $this->lang->line('Facebook Account Import');
 
-        $redirect_url = base_url()."social_accounts/manual_renew_account";
-        $fb_login_button = $this->fb_rx_login->login_for_user_access_token($redirect_url);
-        $data['fb_login_button'] = $fb_login_button;
+    $redirect_url = base_url() . "social_accounts/manual_renew_account";
+    $fb_login_button = $this->fb_rx_login->login_for_user_access_token($redirect_url);
+    $data['fb_login_button'] = $fb_login_button;
 
-        $where['where'] = array('id'=>$this->session->userdata("facebook_rx_fb_user_info"));
-        $existing_accounts = $this->basic->get_data('facebook_rx_fb_user_info',$where);
+    // جلب package_id للمستخدم الحالي
+    $user_id = $this->user_id;
+    $user_info = $this->basic->get_data('users', ['where' => ['id' => $user_id]], ['package_id']);
+    $package_id = isset($user_info[0]['package_id']) ? $user_info[0]['package_id'] : 1;
 
-        $show_import_account_box = 1;
-        $data['show_import_account_box'] = 1;
-        if(!empty($existing_accounts))
-        {
-            $i=0;
-            foreach($existing_accounts as $value)
-            {
-                $existing_account_info[$i]['need_to_delete'] = $value['need_to_delete'];
-                if($value['need_to_delete'] == '1')
-                {
-                   $show_import_account_box = 0; 
-                   $data['show_import_account_box'] = $show_import_account_box;
-                }
+    // جلب تفاصيل الباقة (bulk_limit, monthly_limit)
+    $package_info = $this->basic->get_data('package', ['where' => ['id' => $package_id]], ['bulk_limit','monthly_limit']);
+    $page_limit_bulk = 0;
+    $page_limit_monthly = 0;
 
-                $existing_account_info[$i]['fb_id'] = $value['fb_id'];
-                $existing_account_info[$i]['userinfo_table_id'] = $value['id'];
-                $existing_account_info[$i]['name'] = $value['name'];
-                $existing_account_info[$i]['email'] = $value['email'];
-                $existing_account_info[$i]['user_access_token'] = $value['access_token'];
-
-                $valid_or_invalid = $this->fb_rx_login->access_token_validity_check_for_user($value['access_token']);
-                if($valid_or_invalid)
-                {
-                    $existing_account_info[$i]['validity'] = 'yes';
-                }
-                else{
-                    $existing_account_info[$i]['validity'] = 'no';
-                }
-
-
-                $where = array();
-                $where['where'] = array('facebook_rx_fb_user_info_id'=>$value['id']);
-                $page_count = $this->basic->get_data('facebook_rx_fb_page_info',$where,'','','','','has_instagram DESC');
-                $existing_account_info[$i]['page_list'] = $page_count;
-                if(!empty($page_count))
-                {
-                    $existing_account_info[$i]['total_pages'] = count($page_count);                    
-                }
-                else
-                    $existing_account_info[$i]['total_pages'] = 0;
-
-
-                $group_count = $this->basic->get_data('facebook_rx_fb_group_info',$where);
-                $existing_account_info[$i]['group_list'] = $group_count;
-                if(!empty($group_count))
-                {
-                    $existing_account_info[$i]['total_groups'] = count($group_count);                    
-                }
-                else
-                    $existing_account_info[$i]['total_groups'] = 0;
-                
-                $i++;
+    if (isset($package_info[0]['bulk_limit']) && $package_info[0]['bulk_limit'] != '') {
+        $bulk_limit = json_decode($package_info[0]['bulk_limit'], true);
+        $possible_keys = ['80', '200'];
+        foreach ($possible_keys as $key) {
+            if (isset($bulk_limit[$key]) && (int)$bulk_limit[$key] > 0) {
+                $page_limit_bulk = (int)$bulk_limit[$key];
+                break;
             }
-
-            $data['existing_accounts'] = $existing_account_info;
         }
-        else
-            $data['existing_accounts'] = '0';
-
-
-        $this->_viewcontroller($data);
+        // لو لا وجد المفتاح المعروف، خذ أول قيمة > 0
+        if ($page_limit_bulk == 0 && is_array($bulk_limit)) {
+            foreach ($bulk_limit as $v) {
+                if ((int)$v > 0) { $page_limit_bulk = (int)$v; break; }
+            }
+        }
     }
 
+    if (isset($package_info[0]['monthly_limit']) && $package_info[0]['monthly_limit'] != '') {
+        $monthly_limit = json_decode($package_info[0]['monthly_limit'], true);
+        $possible_keys = ['80', '200'];
+        foreach ($possible_keys as $key) {
+            if (isset($monthly_limit[$key]) && (int)$monthly_limit[$key] > 0) {
+                $page_limit_monthly = (int)$monthly_limit[$key];
+                break;
+            }
+        }
+        if ($page_limit_monthly == 0 && is_array($monthly_limit)) {
+            foreach ($monthly_limit as $v) {
+                if ((int)$v > 0) { $page_limit_monthly = (int)$v; break; }
+            }
+        }
+    }
+
+    // الحد النهائي: الأقل بين bulk و monthly إن وُجِدا وغير صفر
+    $limits = array_filter([$page_limit_bulk, $page_limit_monthly]);
+    $page_limit = !empty($limits) ? min($limits) : 0;
+
+    // احسب عدد الصفحات الحالية للمستخدم (رقم)
+    $current_pages_count = $this->basic->count_row('facebook_rx_fb_page_info', ['where' => ['user_id' => $user_id, 'deleted' => '0']]);
+    if (is_array($current_pages_count)) $current_pages_count = count($current_pages_count);
+    $current_pages_count = (int)$current_pages_count;
+
+    // جلب الحسابات المرتبطة بالمستخدم (كما في الأصلي)
+    $where['where'] = array('id' => $this->session->userdata("facebook_rx_fb_user_info"));
+    $existing_accounts = $this->basic->get_data('facebook_rx_fb_user_info', $where);
+
+    // حساب عدد الصفحات التي سيحاول المستخدم ربطها (attempted_pages)
+    $attempted_pages = 0;
+    if (!empty($existing_accounts)) {
+        foreach ($existing_accounts as $value) {
+            $where_page = array();
+            $where_page['where'] = array('facebook_rx_fb_user_info_id' => $value['id']);
+            // استدعاء get_data بنفس توقيع الأصلي (لا تغيّر ترتيب الوسائط)
+            $page_count = $this->basic->get_data('facebook_rx_fb_page_info', $where_page, '', '', '', '', 'has_instagram DESC');
+            $count_pages = !empty($page_count) && is_array($page_count) ? count($page_count) : 0;
+            $attempted_pages += $count_pages;
+        }
+    }
+    $attempted_pages = (int)$attempted_pages;
+
+    // منع الربط إذا تجاوز الحد
+    $can_import = true;
+    $error_message = '';
+    if ($page_limit > 0 && ($current_pages_count + $attempted_pages) > $page_limit) {
+        $can_import = false;
+        $error_message = $this->lang->line('You are trying to import more pages than allowed in your package. Please select max ') . $page_limit . $this->lang->line(' pages only.');
+        $data['show_import_account_box'] = 0;
+        $data['error_message'] = $error_message;
+    } else {
+        $data['show_import_account_box'] = $can_import ? 1 : 0;
+        if (!$can_import) $data['error_message'] = $error_message;
+    }
+
+    // تجهيز بيانات الحسابات (احتفظ بنفس استدعاءات get_data كما كانت)
+    if (!empty($existing_accounts)) {
+        $i = 0;
+        foreach ($existing_accounts as $value) {
+            $existing_account_info[$i]['need_to_delete'] = $value['need_to_delete'];
+            if ($value['need_to_delete'] == '1') {
+                $data['show_import_account_box'] = 0;
+            }
+
+            $existing_account_info[$i]['fb_id'] = $value['fb_id'];
+            $existing_account_info[$i]['userinfo_table_id'] = $value['id'];
+            $existing_account_info[$i]['name'] = $value['name'];
+            $existing_account_info[$i]['email'] = $value['email'];
+            $existing_account_info[$i]['user_access_token'] = $value['access_token'];
+
+            $valid_or_invalid = $this->fb_rx_login->access_token_validity_check_for_user($value['access_token']);
+            $existing_account_info[$i]['validity'] = $valid_or_invalid ? 'yes' : 'no';
+
+            $where_page = array();
+            $where_page['where'] = array('facebook_rx_fb_user_info_id' => $value['id']);
+            // احتفظ بالطريقة الأصلية لاستدعاء get_data (نفس عدد الوسائط)
+            $page_count = $this->basic->get_data('facebook_rx_fb_page_info', $where_page, '', '', '', '', 'has_instagram DESC');
+            $existing_account_info[$i]['page_list'] = $page_count;
+            $existing_account_info[$i]['total_pages'] = !empty($page_count) ? count($page_count) : 0;
+
+            $group_count = $this->basic->get_data('facebook_rx_fb_group_info', $where_page);
+            $existing_account_info[$i]['group_list'] = $group_count;
+            $existing_account_info[$i]['total_groups'] = !empty($group_count) ? count($group_count) : 0;
+
+            $i++;
+        }
+
+        $data['existing_accounts'] = $existing_account_info;
+    } else {
+        $data['existing_accounts'] = '0';
+    }
+
+    $data['page_limit'] = $page_limit;
+    $data['current_pages_count'] = $current_pages_count;
+    $this->_viewcontroller($data);
+}
 
 
     public function group_delete_action()
@@ -455,6 +513,409 @@ class Social_accounts extends Home
         echo json_encode($response);
     }
 
+private function _auto_enable_bot_for_page(int $page_table_id, string $fb_page_id, string $page_access_token, int $facebook_rx_config_id)
+{
+    // robust logger
+    $log_file = APPPATH . 'logs/bot_pull_enqueue.log';
+    $logf = function(string $line) use ($log_file) {
+        $ts = date('c') . ' ' . $line . "\n";
+        if (@file_put_contents($log_file, $ts, FILE_APPEND) === false) {
+            @error_log("[bot_pull] ".$ts);
+        }
+    };
+
+    // feature flag
+    $auto = (bool)$this->config->item('bot_pull_auto_enable');
+    if (!$auto) { $logf("AUTO_ENABLE SKIP page_table_id={$page_table_id} (config disabled)"); return false; }
+
+    if (empty($page_table_id) || empty($fb_page_id) || empty($page_access_token) || empty($facebook_rx_config_id)) {
+        $logf("AUTO_ENABLE SKIP page_table_id={$page_table_id} missing_params");
+        return false;
+    }
+
+    // anti-duplicate lock
+    try {
+        $row = $this->db->query("SELECT GET_LOCK(?, 2) AS l", ["auto-enable:{$page_table_id}"])->row_array();
+        if ((int)($row['l'] ?? 0) !== 1) { $logf("AUTO_ENABLE SKIP_LOCKED page_table_id={$page_table_id}"); return false; }
+    } catch (\Throwable $e_lock) {}
+
+    // helper to verify subscribed_apps
+    $check_subscribed = function($page_id, $token) {
+        $url = "https://graph.facebook.com/{$page_id}/subscribed_apps?access_token=" . rawurlencode($token);
+        $ctx = stream_context_create(['http'=>['timeout'=>6]]);
+        $res = @file_get_contents($url, false, $ctx);
+        if ($res === false) return false;
+        $json = @json_decode($res, true);
+        if (!is_array($json)) return false;
+        return !empty($json['data']) && is_array($json['data']) && count($json['data']) > 0;
+    };
+
+    try {
+        $this->load->library('fb_rx_login');
+        $this->fb_rx_login->app_initialize($facebook_rx_config_id);
+        $logf("AUTO_ENABLE_ATTEMPT page_table_id={$page_table_id} fb_page={$fb_page_id} cfg_id={$facebook_rx_config_id}");
+
+        // enable + verify with backoff
+        $max_attempts = 6;
+        $attempt = 0;
+        $enabled_ok = false;
+        $last_output = null;
+
+        while ($attempt < $max_attempts) {
+            $attempt++;
+
+            $output = $this->fb_rx_login->enable_bot($fb_page_id, $page_access_token);
+            $last_output = $output;
+            $logf("AUTO_ENABLE raw_output_attempt{$attempt}=" . json_encode($output, JSON_UNESCAPED_UNICODE));
+
+            // log any error but keep retrying
+            $err = '';
+            if (is_array($output)) {
+                if (!empty($output['error'])) $err = is_string($output['error']) ? $output['error'] : json_encode($output['error']);
+                elseif (!empty($output['error_msg'])) $err = $output['error_msg'];
+                elseif (!empty($output['message'])) $err = $output['message'];
+            } elseif ($output === false) $err = 'enable_bot returned false';
+            if ($err !== '') $logf("AUTO_ENABLE_ATTEMPT{$attempt}_ERR page_table_id={$page_table_id} err=" . substr($err,0,500));
+
+            $wait_ms = [400,800,1200,1800,3000,4000][min($attempt-1,5)];
+            usleep((int)$wait_ms * 1000);
+
+            $sub_ok = false;
+            try { $sub_ok = $check_subscribed($fb_page_id, $page_access_token); } catch (\Throwable $e) { $sub_ok = false; }
+            $logf("AUTO_ENABLE_VERIFY attempt={$attempt} subscribed=" . ($sub_ok ? '1' : '0') . " page_table_id={$page_table_id}");
+
+            if ($sub_ok) { $enabled_ok = true; break; }
+        }
+
+        if (!$enabled_ok) {
+            $logf("AUTO_ENABLE_FAILED_VERIFICATION page_table_id={$page_table_id} last_output=" . json_encode($last_output, JSON_UNESCAPED_UNICODE));
+            return false;
+        }
+
+        // success: update the actual columns your UI can depend on
+        $update = [
+            "bot_enabled" => "1",
+            "started_button_enabled" => "1",
+            "persistent_enabled" => "1",
+            "msg_manager" => "1",
+            "review_status_last_checked" => gmdate('Y-m-d H:i:s'),
+        ];
+        $this->basic->update_data("facebook_rx_fb_page_info", ["id" => $page_table_id], $update);
+
+        // Post-actions (don't break flow if they fail)
+        try {
+            // keep original helper calls
+            $this->getstarted_enable_disable_onpage($page_table_id, '1', $page_access_token, $facebook_rx_config_id);
+            $this->check_review_status_broadcaster($page_table_id, $fb_page_id, $page_access_token, $facebook_rx_config_id);
+
+            // add system defaults
+            $this->add_system_quick_email_reply($page_table_id, $fb_page_id);
+            $this->add_system_quick_phone_reply($page_table_id, $fb_page_id);
+            $this->add_system_quick_location_reply($page_table_id, $fb_page_id);
+            $this->add_system_quick_birthday_reply($page_table_id, $fb_page_id);
+            $this->add_system_postback_entry($page_table_id, $fb_page_id);
+            $this->add_system_getstarted_reply_entry($page_table_id, $fb_page_id);
+            $this->add_system_nomatch_reply_entry($page_table_id, $fb_page_id);
+            $this->add_system_story_mention_reply_entry($page_table_id, $fb_page_id);
+            $this->add_system_story_private_reply_entry($page_table_id, $fb_page_id);
+            $this->add_system_message_unsend_reply_entry($page_table_id, $fb_page_id);
+        } catch (\Throwable $e_inner) {
+            log_message('error', 'auto_enable post-actions error: '.$e_inner->getMessage());
+        }
+
+        $logf("AUTO_ENABLED page_table_id={$page_table_id} fb_page={$fb_page_id}");
+
+        // enqueue
+        if (!function_exists('bot_pull_enqueue_page')) {
+            if (method_exists($this, 'load')) { @ $this->load->helper('bot_pull_helper'); }
+        }
+        if (function_exists('bot_pull_enqueue_page')) {
+            @bot_pull_enqueue_page($this, $page_table_id, $this->user_id);
+        } else {
+            $exists = $this->db->where('page_table_id', $page_table_id)->where('picked_at IS NULL', null, false)->get('bot_pull_manual_queue')->row_array();
+            if (empty($exists)) {
+                $this->db->insert('bot_pull_manual_queue', ['page_table_id'=>$page_table_id,'created_by'=>$this->user_id,'created_at'=>gmdate('Y-m-d H:i:s')]);
+                $logf("ENQUEUED_DIRECT page_table_id={$page_table_id}");
+            } else {
+                $logf("SKIP already queued page_table_id={$page_table_id}");
+            }
+        }
+
+        // spawn imports + worker (immediate + delayed)
+        $bg_lock = sys_get_temp_dir() . '/bot_pull_import_lock_' . $page_table_id . '.lock';
+        $cooldown_seconds = 60;
+        $now = time();
+        $do_spawn = true;
+        if (file_exists($bg_lock)) {
+            $age = $now - (int)@filemtime($bg_lock);
+            if ($age < $cooldown_seconds) $do_spawn = false;
+        }
+
+        if ($do_spawn) {
+            @touch($bg_lock);
+            $php = defined('PHP_BINARY') ? PHP_BINARY : PHP_BINDIR.'/php';
+            if (!is_executable($php)) $php = '/usr/bin/php';
+            $index = defined('FCPATH') ? rtrim(FCPATH, '/\\') . DIRECTORY_SEPARATOR . 'index.php' : (getenv('DOCUMENT_ROOT') ? rtrim(getenv('DOCUMENT_ROOT'),'/\\').'/index.php' : '/home/social/public_html/index.php');
+
+            $import_cmd = escapeshellcmd($php) . ' -q ' . escapeshellarg($index) . ' bot_pull/bot_pull_cli/import_page ' . (int)$page_table_id . ' 150';
+            @exec($import_cmd . ' > /dev/null 2>&1 &');
+
+            $delayed_seconds = 8;
+            $delayed_cmd = 'nohup bash -c ' . escapeshellarg("sleep {$delayed_seconds}; {$php} -q " . escapeshellarg($index) . " bot_pull/bot_pull_cli/import_page " . (int)$page_table_id . " 150") . ' > /dev/null 2>&1 &';
+            @exec($delayed_cmd);
+
+            $worker_cmd = escapeshellcmd($php) . ' -q ' . escapeshellarg($index) . ' bot_pull/bot_pull_worker/run_simple 0 1 1 0 --manual-only=1';
+            @exec($worker_cmd . ' > /dev/null 2>&1 &');
+
+            $logf("SPAWNED_BG_IMPORT page_table_id={$page_table_id}");
+        } else {
+            $logf("SKIP_BG_IMPORT_LOCKED page_table_id={$page_table_id}");
+        }
+
+        return true;
+    } catch (\Throwable $e) {
+        log_message('error', 'auto_enable exception: '.$e->getMessage());
+        try { $this->db->query("DO RELEASE_LOCK(?)", ["auto-enable:{$page_table_id}"]); } catch (\Throwable $e_rel) {}
+        $logf("AUTO_ENABLE_EXCEPTION page_table_id={$page_table_id} err=" . $e->getMessage());
+        return false;
+    } finally {
+        try { $this->db->query("DO RELEASE_LOCK(?)", ["auto-enable:{$page_table_id}"]); } catch (\Throwable $e_rel) {}
+    }
+}
+
+public function bulk_enable_webhook()
+{
+    if (!$this->input->is_ajax_request() || strtoupper($this->input->method()) !== 'POST') {
+        show_404();
+        return;
+    }
+
+    $page_ids = $this->input->post('page_ids'); // array of page_table_id
+    $restart  = (int)$this->input->post('restart'); // optional
+
+    if (!is_array($page_ids) || empty($page_ids)) {
+        echo json_encode(['status' => 0, 'message' => 'No pages selected.', 'results' => []]);
+        return;
+    }
+
+    $log_file = APPPATH . 'logs/bot_pull_enqueue.log';
+    $logf = function ($line) use ($log_file) {
+        $ts = date('c') . ' ' . $line . "\n";
+        if (@file_put_contents($log_file, $ts, FILE_APPEND) === false) {
+            @error_log("[bot_pull] " . $ts);
+        }
+    };
+
+    @set_time_limit(0);
+    @ignore_user_abort(true);
+
+    $results = [];
+    $success_count = 0;
+
+    foreach ($page_ids as $pid) {
+        $pid = (int)$pid;
+        if ($pid <= 0) {
+            $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Invalid page_table_id'];
+            continue;
+        }
+
+        try {
+            // own page check
+            $rows = $this->basic->get_data(
+                'facebook_rx_fb_page_info',
+                ['where' => ['id' => $pid, 'user_id' => $this->user_id]],
+                ['id','page_id','page_name','page_access_token','facebook_rx_fb_user_info_id','bot_enabled'],
+                '', '', NULL, '', '', 0, '', 1
+            );
+            if (empty($rows)) {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Page not found or not owned by user'];
+                continue;
+            }
+            $pageRow = $rows[0];
+            $fb_page_id = (string)$pageRow['page_id'];
+            $page_access_token = (string)$pageRow['page_access_token'];
+            $fb_user_info_id = (int)$pageRow['facebook_rx_fb_user_info_id'];
+
+            // get config id
+            $cfg = $this->basic->get_data(
+                'facebook_rx_fb_user_info',
+                ['where' => ['id' => $fb_user_info_id, 'user_id' => $this->user_id]],
+                ['facebook_rx_config_id'], '', '', NULL, '', '', 0, '', 1
+            );
+            if (empty($cfg)) {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Config not found for page'];
+                continue;
+            }
+            $facebook_rx_config_id = (int)$cfg[0]['facebook_rx_config_id'];
+
+            // fallback: fetch page token if empty
+            if (empty($page_access_token)) {
+                try {
+                    $uinfo = $this->basic->get_data(
+                        'facebook_rx_fb_user_info',
+                        ['where' => ['id' => $fb_user_info_id]],
+                        ['access_token'], '', '', NULL, '', '', 0, '', 1
+                    );
+                    $user_access_token = !empty($uinfo) ? (string)$uinfo[0]['access_token'] : '';
+                    if (!empty($user_access_token)) {
+                        if (method_exists($this->fb_rx_login, 'get_page_access_token')) {
+                            $fallback_token = $this->fb_rx_login->get_page_access_token($fb_page_id, $user_access_token);
+                        } else {
+                            $url = "https://graph.facebook.com/{$fb_page_id}?fields=access_token&access_token=" . rawurlencode($user_access_token);
+                            $ctx = stream_context_create(['http'=>['timeout'=>6]]);
+                            $res = @file_get_contents($url, false, $ctx);
+                            $json = @json_decode($res, true);
+                            $fallback_token = is_array($json) && !empty($json['access_token']) ? $json['access_token'] : '';
+                        }
+                        if (!empty($fallback_token)) {
+                            $page_access_token = $fallback_token;
+                            $this->basic->update_data('facebook_rx_fb_page_info', ['id' => $pid], ['page_access_token' => $page_access_token]);
+                            $logf("BULK PAGE_TOKEN_FALLBACK_OK page_table_id={$pid}");
+                        } else {
+                            $logf("BULK PAGE_TOKEN_FALLBACK_FAIL page_table_id={$pid}");
+                        }
+                    }
+                } catch (\Throwable $eFallback) {
+                    $logf("BULK PAGE_TOKEN_FALLBACK_ERR page_table_id={$pid} err=".$eFallback->getMessage());
+                }
+            }
+
+            if (empty($page_access_token)) {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Missing page_access_token'];
+                continue;
+            }
+
+            $logf("BULK AUTO_ENABLE_ATTEMPT page_table_id={$pid} fb_page={$fb_page_id} cfg_id={$facebook_rx_config_id}");
+            $ok = (bool)$this->_auto_enable_bot_for_page($pid, $fb_page_id, $page_access_token, $facebook_rx_config_id);
+            if ($ok) {
+                $this->basic->update_data('facebook_rx_fb_page_info', ['id' => $pid], ['bot_enabled' => '1']);
+                $results[] = ['id' => $pid, 'status' => 1, 'message' => 'Enabled'];
+                $success_count++;
+                $logf("BULK AUTO_ENABLED page_table_id={$pid}");
+            } else {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Enable failed'];
+                $logf("BULK AUTO_ENABLE_FAILED page_table_id={$pid}");
+            }
+        } catch (\Throwable $e) {
+            $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Exception: '.$e->getMessage()];
+            $logf("BULK AUTO_ENABLE_EXCEPTION page_table_id={$pid} err=".$e->getMessage());
+        }
+    }
+
+    echo json_encode([
+        'status' => $success_count > 0 ? 1 : 0,
+        'message' => "Processed ".count($page_ids)." pages, success={$success_count}",
+        'results' => $results
+    ]);
+}
+
+public function bulk_disable_webhook()
+{
+    if (!$this->input->is_ajax_request() || strtoupper($this->input->method()) !== 'POST') {
+        show_404();
+        return;
+    }
+
+    $page_ids = $this->input->post('page_ids'); // array of page_table_id
+    if (!is_array($page_ids) || empty($page_ids)) {
+        echo json_encode(['status' => 0, 'message' => 'No pages selected.', 'results' => []]);
+        return;
+    }
+
+    $log_file = APPPATH . 'logs/bot_pull_enqueue.log';
+    $logf = function ($line) use ($log_file) {
+        $ts = date('c') . ' ' . $line . "\n";
+        if (@file_put_contents($log_file, $ts, FILE_APPEND) === false) {
+            @error_log("[bot_pull] " . $ts);
+        }
+    };
+
+    @set_time_limit(0);
+    @ignore_user_abort(true);
+
+    $results = [];
+    $success_count = 0;
+
+    foreach ($page_ids as $pid) {
+        $pid = (int)$pid;
+        if ($pid <= 0) {
+            $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Invalid page_table_id'];
+            continue;
+        }
+
+        try {
+            // own page check
+            $rows = $this->basic->get_data(
+                'facebook_rx_fb_page_info',
+                ['where' => ['id' => $pid, 'user_id' => $this->user_id]],
+                ['id','page_id','page_name','page_access_token','facebook_rx_fb_user_info_id','bot_enabled'],
+                '', '', NULL, '', '', 0, '', 1
+            );
+            if (empty($rows)) {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Page not found or not owned by user'];
+                continue;
+            }
+            $pageRow = $rows[0];
+            $fb_page_id = (string)$pageRow['page_id'];
+            $page_access_token = (string)$pageRow['page_access_token'];
+            $fb_user_info_id = (int)$pageRow['facebook_rx_fb_user_info_id'];
+
+            // get config id
+            $cfg = $this->basic->get_data(
+                'facebook_rx_fb_user_info',
+                ['where' => ['id' => $fb_user_info_id, 'user_id' => $this->user_id]],
+                ['facebook_rx_config_id'], '', '', NULL, '', '', 0, '', 1
+            );
+            if (empty($cfg)) {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Config not found for page'];
+                continue;
+            }
+            $facebook_rx_config_id = (int)$cfg[0]['facebook_rx_config_id'];
+
+            $ok = false;
+            try {
+                // حاول تستخدم الدالة إن كانت موجودة
+                if (method_exists($this->fb_rx_login, 'app_initialize')) {
+                    $this->fb_rx_login->app_initialize($facebook_rx_config_id);
+                }
+                if (method_exists($this->fb_rx_login, 'disable_bot')) {
+                    $resp = $this->fb_rx_login->disable_bot($fb_page_id, $page_access_token);
+                    $ok = !empty($resp) && (is_array($resp) ? empty($resp['error']) : true);
+                } else {
+                    // fallback: إزالة الاشتراك عبر Graph (إذا لزم)
+                    $url = "https://graph.facebook.com/{$fb_page_id}/subscribed_apps?access_token=" . rawurlencode($page_access_token);
+                    $opts = ['http' => ['method' => 'DELETE', 'timeout' => 8]];
+                    $ctx  = stream_context_create($opts);
+                    $res  = @file_get_contents($url, false, $ctx);
+                    $json = @json_decode($res, true);
+                    $ok   = is_array($json) ? (empty($json['error'])) : (bool)$res;
+                }
+            } catch (\Throwable $eDisable) {
+                $logf("BULK AUTO_DISABLE_ERR page_table_id={$pid} err=".$eDisable->getMessage());
+                $ok = false;
+            }
+
+            if ($ok) {
+                $this->basic->update_data('facebook_rx_fb_page_info', ['id' => $pid], ['bot_enabled' => '0']);
+                $results[] = ['id' => $pid, 'status' => 1, 'message' => 'Disabled'];
+                $success_count++;
+                $logf("BULK AUTO_DISABLED page_table_id={$pid}");
+            } else {
+                $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Disable failed'];
+                $logf("BULK AUTO_DISABLE_FAILED page_table_id={$pid}");
+            }
+        } catch (\Throwable $e) {
+            $results[] = ['id' => $pid, 'status' => 0, 'message' => 'Exception: '.$e->getMessage()];
+            $logf("BULK AUTO_DISABLE_EXCEPTION page_table_id={$pid} err=".$e->getMessage());
+        }
+    }
+
+    echo json_encode([
+        'status' => $success_count > 0 ? 1 : 0,
+        'message' => "Processed ".count($page_ids)." pages, success={$success_count}",
+        'results' => $results
+    ]);
+}
     public function reset_action_settings()
     {
         $this->ajax_check();
@@ -1361,239 +1822,382 @@ class Social_accounts extends Home
 
 
     public function manual_renew_account()
-    {
-        $this->is_group_posting_exist=$this->group_posting_exist();
-        $id = $this->session->userdata('fb_rx_login_database_id');
-        $redirect_url = base_url()."social_accounts/manual_renew_account";
+{
+    // Logger مع fallback إلى error_log لو مجلد اللوج غير قابل للكتابة
+    $log_file = APPPATH . 'logs/bot_pull_enqueue.log';
+    $logf = function ($line) use ($log_file) {
+        $ts = date('c') . ' ' . $line . "\n";
+        if (@file_put_contents($log_file, $ts, FILE_APPEND) === false) {
+            @error_log("[bot_pull] " . $ts);
+        }
+    };
 
-        $user_info = array();
-        $user_info = $this->fb_rx_login->login_callback_without_email($redirect_url);   
-                
-        if( isset($user_info['status']) && $user_info['status'] == '0')
-        {
-            $data['error'] = 1;
-            $data['message'] = $this->lang->line("something went wrong in profile access")." : ".$user_info['message'];
-            $data['body'] = "facebook_rx/user_login";
-            $this->_viewcontroller($data);
-        } 
-        else 
-        {
-            $access_token=$user_info['access_token_set'];
+    $this->is_group_posting_exist = $this->group_posting_exist();
+    $id = $this->session->userdata('fb_rx_login_database_id'); // facebook_rx_config_id
+    $redirect_url = base_url() . "social_accounts/manual_renew_account";
 
-            //checking permission given by the users            
-            $permission = $this->fb_rx_login->debug_access_token($access_token);
+    $user_info = array();
+    $user_info = $this->fb_rx_login->login_callback_without_email($redirect_url);
 
-            $given_permission = array();
-            if(isset($permission['data']['scopes']))
-            {
-                $permission_checking = array();
-                $needed_permission = array('manage_pages','publish_pages','pages_messaging');
-                $given_permission = $permission['data']['scopes'];
-                $permission_checking = array_intersect($needed_permission,$given_permission);
-                if(empty($permission_checking))
-                {
-                    $documentation_link = base_url('documentation/#!/sm_import_account');
-                    $text = $this->lang->line("All needed permissions are not approved for your app")." [".implode(',', $needed_permission)."]";
-                    $this->session->set_userdata('limit_cross', $text);
-                    redirect('social_accounts/index','location');                
-                    exit();
+    if (isset($user_info['status']) && $user_info['status'] == '0') {
+        $data['error'] = 1;
+        $data['message'] = $this->lang->line("something went wrong in profile access") . " : " . $user_info['message'];
+        $data['body'] = "facebook_rx/user_login";
+        $this->_viewcontroller($data);
+        return;
+    }
+
+    $access_token = $user_info['access_token_set'];
+
+    // التحقق من الصلاحيات المطلوبة
+    $permission = $this->fb_rx_login->debug_access_token($access_token);
+    if (isset($permission['data']['scopes'])) {
+        $needed_permission = array('manage_pages', 'publish_pages', 'pages_messaging');
+        $given_permission = $permission['data']['scopes'];
+        $permission_checking = array_intersect($needed_permission, $given_permission);
+        if (empty($permission_checking)) {
+            $text = $this->lang->line("All needed permissions are not approved for your app") . " [" . implode(',', $needed_permission) . "]";
+            $this->session->set_userdata('limit_cross', $text);
+            redirect('social_accounts/index', 'location');
+            return;
+        }
+    }
+
+    if (!isset($access_token)) {
+        $data['error'] = 1;
+        $data['message'] = "'" . $this->lang->line("something went wrong,please") . "' <a href='" . base_url("social_accounts/account_import") . "'>'" . $this->lang->line("try again") . "'</a>";
+        $data['body'] = "facebook_rx/user_login";
+        $this->_viewcontroller($data);
+        return;
+    }
+
+    // App initialize دفاعي
+    try {
+        $this->fb_rx_login->app_initialize($id);
+    } catch (Exception $e) {}
+
+    // Upsert لمعلومات المستخدم
+    $data = array(
+        'user_id' => $this->user_id,
+        'facebook_rx_config_id' => $id,
+        'access_token' => $access_token,
+        'name' => $user_info['name'],
+        'fb_id' => $user_info['id'],
+        'add_date' => date('Y-m-d'),
+        'deleted' => '0'
+    );
+    $where = array();
+    $where['where'] = array('user_id' => $this->user_id, 'fb_id' => $user_info['id']);
+    $exist_or_not = $this->basic->get_data('facebook_rx_fb_user_info', $where, '', '', '', NULL, '', '', 0, '', 1);
+
+    if (empty($exist_or_not)) {
+        // usage check
+        $status = $this->_check_usage($module_id = 65, $request = 1);
+        if ($status == "2" || $status == "3") {
+            $this->session->set_userdata('limit_cross', $this->lang->line("Module limit is over."));
+            redirect('social_accounts/index', 'location');
+            return;
+        }
+
+        $this->basic->insert_data('facebook_rx_fb_user_info', $data);
+        $facebook_table_id = $this->db->insert_id();
+
+        // usage log
+        $this->_insert_usage_log($module_id = 65, $request = 1);
+    } else {
+        $facebook_table_id = $exist_or_not[0]['id'];
+        $where = array('user_id' => $this->user_id, 'id' => $facebook_table_id);
+        $this->basic->update_data('facebook_rx_fb_user_info', $where, $data);
+    }
+
+    $this->session->set_userdata("facebook_rx_fb_user_info", $facebook_table_id);
+
+    // صفحات المستخدم
+    $page_list = $this->fb_rx_login->get_page_list($access_token);
+
+    if (isset($page_list['error']) && $page_list['error'] == '1') {
+        $data['error'] = 1;
+        $data['message'] = $this->lang->line("Something went wrong in page access") . " : " . $page_list['message'];
+        $data['body'] = "facebook_rx/user_login";
+        $this->_viewcontroller($data);
+        return;
+    }
+
+    if (!empty($page_list)) {
+        $default_import_limit = (int)($this->config->item('bot_pull_import_limit') ?: 150);
+
+        foreach ($page_list as $page) {
+            $user_id = $this->user_id;
+            $page_id = $page['id'];
+            $page_cover = isset($page['cover']['source']) ? $page['cover']['source'] : '';
+            $page_profile = isset($page['picture']['url']) ? $page['picture']['url'] : '';
+            $page_name = isset($page['name']) ? $page['name'] : '';
+            $page_access_token = isset($page['access_token']) ? $page['access_token'] : '';
+            $page_email = isset($page['emails'][0]) ? $page['emails'][0] : '';
+            $page_username = isset($page['username']) ? $page['username'] : '';
+
+            // استخدم $pageData بدل $data لعدم التخبيط
+            $pageData = array(
+                'user_id' => $user_id,
+                'facebook_rx_fb_user_info_id' => $facebook_table_id,
+                'page_id' => $page_id,
+                'page_cover' => $page_cover,
+                'page_profile' => $page_profile,
+                'page_name' => $page_name,
+                'username' => $page_username,
+                'page_access_token' => $page_access_token,
+                'page_email' => $page_email,
+                'add_date' => date('Y-m-d'),
+                'deleted' => '0'
+            );
+
+            // إنستجرام (اختياري)
+            $instagram_account_exist_or_not = '';
+            if ($this->config->item('instagram_reply_enable_disable') == '1') {
+                try {
+                    $instagram_account_exist_or_not = $this->fb_rx_login->instagram_account_check_by_id($page['id'], $access_token);
+                } catch (Exception $e) {
+                    $instagram_account_exist_or_not = '';
                 }
             }
-            
-            if(isset($access_token))
-            {
-                $data = array(
-                    'user_id' => $this->user_id,
-                    'facebook_rx_config_id' => $id,
-                    'access_token' => $access_token,
-                    'name' => $user_info['name'],
-                    'fb_id' => $user_info['id'],
-                    'add_date' => date('Y-m-d'),
-                    'deleted' => '0'
+            if ($instagram_account_exist_or_not != "") {
+                try {
+                    $instagram_account_info = $this->fb_rx_login->instagram_account_info($instagram_account_exist_or_not, $access_token);
+                } catch (Exception $e) {
+                    $instagram_account_info = array();
+                }
+                $pageData['has_instagram'] = '1';
+                $pageData['instagram_business_account_id'] = $instagram_account_exist_or_not;
+                $pageData['insta_username'] = isset($instagram_account_info['username']) ? $instagram_account_info['username'] : "";
+                $pageData['insta_followers_count'] = isset($instagram_account_info['followers_count']) ? $instagram_account_info['followers_count'] : "";
+                $pageData['insta_media_count'] = isset($instagram_account_info['media_count']) ? $instagram_account_info['media_count'] : "";
+                $pageData['insta_website'] = isset($instagram_account_info['website']) ? $instagram_account_info['website'] : "";
+                $pageData['insta_biography'] = isset($instagram_account_info['biography']) ? $instagram_account_info['biography'] : "";
+            }
+
+            // upsert للصفحة
+            $where = array();
+            $where['where'] = array('facebook_rx_fb_user_info_id' => $facebook_table_id, 'page_id' => $page['id']);
+            $exist_or_not = $this->basic->get_data('facebook_rx_fb_page_info', $where, '', '', '', NULL, '', '', 0, '', 1);
+
+            if (empty($exist_or_not)) {
+                $this->basic->insert_data('facebook_rx_fb_page_info', $pageData);
+                $page_table_id = (int)$this->db->insert_id();
+            } else {
+                $where = array('facebook_rx_fb_user_info_id' => $facebook_table_id, 'page_id' => $page['id']);
+                $this->basic->update_data('facebook_rx_fb_page_info', $where, $pageData);
+                $page_table_id = (int)$exist_or_not[0]['id'];
+            }
+
+            // لو التوكن فاضي، جيبه fallback من Graph باستخدام user access token
+            if (empty($page_access_token)) {
+                try {
+                    if (method_exists($this->fb_rx_login, 'get_page_access_token')) {
+                        $fallback_token = $this->fb_rx_login->get_page_access_token($page_id, $access_token);
+                    } else {
+                        $url = "https://graph.facebook.com/{$page_id}?fields=access_token&access_token=" . rawurlencode($access_token);
+                        $ctx = stream_context_create(['http' => ['timeout' => 6]]);
+                        $res = @file_get_contents($url, false, $ctx);
+                        $json = @json_decode($res, true);
+                        $fallback_token = is_array($json) && !empty($json['access_token']) ? $json['access_token'] : '';
+                    }
+                    if (!empty($fallback_token)) {
+                        $page_access_token = $fallback_token;
+                        $this->basic->update_data('facebook_rx_fb_page_info', ['id' => $page_table_id], ['page_access_token' => $page_access_token]);
+                        $logf("PAGE_TOKEN_FALLBACK_OK page_table_id={$page_table_id}");
+                    } else {
+                        $logf("PAGE_TOKEN_FALLBACK_FAIL page_table_id={$page_table_id}");
+                    }
+                } catch (\Throwable $e) {
+                    $logf("PAGE_TOKEN_FALLBACK_ERR page_table_id={$page_table_id} err=" . $e->getMessage());
+                }
+            }
+
+            // تفعيل البوت أوتوماتيك + إجبار bot_enabled=1 عند النجاح
+            if (!empty($page_table_id) && !empty($page_access_token)) {
+                $logf("AUTO_ENABLE_CALL_ATTEMPT page_table_id={$page_table_id} fb_page={$page_id} cfg_candidate_id={$id}");
+                $auto_ok = false;
+                try {
+                    $auto_ok = (bool)$this->_auto_enable_bot_for_page($page_table_id, (string)$page_id, (string)$page_access_token, (int)$id);
+                } catch (Exception $e) {
+                    $auto_ok = false;
+                    $logf("AUTO_ENABLE_CALL_ERR page_table_id={$page_table_id} err=" . $e->getMessage());
+                }
+                if ($auto_ok) {
+                    try {
+                        $this->basic->update_data("facebook_rx_fb_page_info", ["id" => $page_table_id], ["bot_enabled" => "1"]);
+                        $logf("AUTO_ENABLE_FORCED_SET page_table_id={$page_table_id} bot_enabled=1");
+                    } catch (Exception $e) {
+                        $logf("AUTO_ENABLE_FORCE_ERR page_table_id={$page_table_id} err=" . $e->getMessage());
+                    }
+                } else {
+                    $logf("AUTO_ENABLE_CALL_FAIL page_table_id={$page_table_id}");
+                }
+                $logf("AUTO_ENABLE_CALL_DONE page_table_id={$page_table_id} fb_page={$page_id}");
+            }
+
+            // ---------- استيراد سريع للمحادثات ----------
+            if (!empty($page_access_token) && !empty($page_table_id)) {
+                try {
+                    $is_ig = (isset($pageData['instagram_business_account_id']) && !empty($pageData['instagram_business_account_id']))
+                          || (isset($pageData['insta_username']) && !empty($pageData['insta_username']))
+                          || (isset($pageData['has_instagram']) && (int)$pageData['has_instagram'] === 1);
+
+                    $social_media = $is_ig ? 'ig' : 'fb';
+                    $limit = max(10, min(500, $default_import_limit));
+
+                    $convos = $this->fb_rx_login->get_all_conversation_page(
+                        $page_access_token,
+                        $page_id,
+                        0,
+                        $limit,
+                        'inbox',
+                        $social_media
                     );
 
-                $where=array();
-                $where['where'] = array('user_id'=>$this->user_id,'fb_id'=>$user_info['id']);
-                $exist_or_not = array();
-                $exist_or_not = $this->basic->get_data('facebook_rx_fb_user_info',$where,$select='',$join='',$limit='',$start=NULL,$order_by='',$group_by='',$num_rows=0,$csv='',$delete_overwrite=1);
+                    $logf("IMPORT_DEBUG START page_table_id={$page_table_id} limit={$limit}");
+                    $logf("IMPORT_DEBUG raw_response_type=" . gettype($convos));
 
-                if(empty($exist_or_not))
-                {
-                    //************************************************//
-                    $status=$this->_check_usage($module_id=65,$request=1);
-                    if($status=="2") 
-                    {
-                        $this->session->set_userdata('limit_cross', $this->lang->line("Module limit is over."));
-                        redirect('social_accounts/index','location');                
-                        exit();
+                    if (is_array($convos)) {
+                        $logf("IMPORT_DEBUG count=" . count($convos));
+                        $slice = array_slice($convos, 0, 5);
+                        $logf("IMPORT_DEBUG sample=" . json_encode($slice, JSON_UNESCAPED_UNICODE));
+                    } else {
+                        $logf("IMPORT_DEBUG non-array response=" . json_encode($convos, JSON_UNESCAPED_UNICODE));
                     }
-                    else if($status=="3") 
-                    {
-                        $this->session->set_userdata('limit_cross', $this->lang->line("Module limit is over."));
-                        redirect('social_accounts/index','location');                
-                        exit();
-                    }
-                    //************************************************//
-                    $this->basic->insert_data('facebook_rx_fb_user_info',$data);
-                    $facebook_table_id = $this->db->insert_id();
 
-                    //insert data to useges log table
-                    $this->_insert_usage_log($module_id=65,$request=1);
-                }
-                else
-                {
-                    $facebook_table_id = $exist_or_not[0]['id'];
-                    $where = array('user_id'=>$this->user_id,'id'=>$facebook_table_id);
-                    $this->basic->update_data('facebook_rx_fb_user_info',$where,$data);
-                }
+                    if (isset($convos['error'])) {
+                        $logf("IMPORT SKIP page_table_id={$page_table_id} fb_error=" . ($convos['error_msg'] ?? 'unknown'));
+                    } else {
+                        $totalConvos = is_array($convos) ? count($convos) : 0;
+                        $imported = 0;
 
-                $this->session->set_userdata("facebook_rx_fb_user_info",$facebook_table_id);  
+                        foreach ($convos as $item) {
+                            $db_client_id        = isset($item['id']) ? $item['id'] : '';
+                            $db_client_thread_id = isset($item['thread_id']) ? $item['thread_id'] : (isset($item['thead_id']) ? $item['thead_id'] : '');
+                            $lead_name           = isset($item['name']) ? $item['name'] : '';
+                            $link                = isset($item['link']) ? $item['link'] : '';
 
-                $page_list = array();
-                $page_list = $this->fb_rx_login->get_page_list($access_token);
+                            if ($db_client_id === '') continue;
+                            if ($lead_name === 'Facebook User' || $lead_name === 'Instagram User') continue;
 
-                if(isset($page_list['error']) && $page_list['error'] == '1')
-                {
-                    $data['error'] = 1;
-                    $data['message'] = $this->lang->line("Something went wrong in page access")." : ".$page_list['message'];
-                    $data['body'] = "facebook_rx/user_login";
-                    return $this->_viewcontroller($data);                    
-                }
-
-                if(!empty($page_list))
-                {
-                    foreach($page_list as $page)
-                    {
-                        $user_id = $this->user_id;
-                        $page_id = $page['id'];
-                        $page_cover = '';
-                        if(isset($page['cover']['source'])) $page_cover = $page['cover']['source'];
-                        $page_profile = '';
-                        if(isset($page['picture']['url'])) $page_profile = $page['picture']['url'];
-                        $page_name = '';
-                        if(isset($page['name'])) $page_name = $page['name'];
-                        $page_access_token = '';
-                        if(isset($page['access_token'])) $page_access_token = $page['access_token'];
-                        $page_email = '';
-                        if(isset($page['emails'][0])) $page_email = $page['emails'][0];
-                        $page_username = '';
-                        if(isset($page['username'])) $page_username = $page['username'];
-
-                        $data = array(
-                            'user_id' => $user_id,
-                            'facebook_rx_fb_user_info_id' => $facebook_table_id,
-                            'page_id' => $page_id,
-                            'page_cover' => $page_cover,
-                            'page_profile' => $page_profile,
-                            'page_name' => $page_name,
-                            'username' => $page_username,
-                            'page_access_token' => $page_access_token,
-                            'page_email' => $page_email,
-                            'add_date' => date('Y-m-d'),
-                            'deleted' => '0'
+                            $this->db->query(
+                                "INSERT INTO messenger_bot_subscriber
+                                 (page_table_id,page_id,user_id,client_thread_id,subscribe_id,full_name,permission,subscribed_at,link,is_imported,is_updated_name,is_bot_subscriber,social_media)
+                                 VALUES (?,?,?,?,?,?,? ,UTC_TIMESTAMP(),? ,'1','1','0',?)
+                                 ON DUPLICATE KEY UPDATE 
+                                    client_thread_id=VALUES(client_thread_id),
+                                    link=VALUES(link),
+                                    full_name=VALUES(full_name)",
+                                [
+                                    $page_table_id,
+                                    $page_id,
+                                    $this->user_id,
+                                    $db_client_thread_id,
+                                    $db_client_id,
+                                    $lead_name,
+                                    '1',
+                                    $link,
+                                    $social_media
+                                ]
                             );
 
-                        // instagram section
-                        $instagram_account_exist_or_not = '';
-                        if($this->config->item('instagram_reply_enable_disable') == '1')
-	                      //  $instagram_account_exist_or_not = $this->fb_rx_login->instagram_account_check_by_id($page['id'], $page['access_token']);
-                            $instagram_account_exist_or_not = $this->fb_rx_login->instagram_account_check_by_id($page['id'], $access_token);
-                        
-                        if ($instagram_account_exist_or_not != "") {
-                         //  $instagram_account_info = $this->fb_rx_login->instagram_account_info($instagram_account_exist_or_not, $access_token); 
-                            $instagram_account_info = $this->fb_rx_login->instagram_account_info($instagram_account_exist_or_not, $access_token); 
+                            // اعتبر كل محادثة معالجة
+                            $imported++;
 
-                            $data['has_instagram'] = '1';
-                            $data['instagram_business_account_id'] = $instagram_account_exist_or_not; 
-                            $data['insta_username'] = isset($instagram_account_info['username']) ? $instagram_account_info['username'] : "";
-                            $data['insta_followers_count'] = isset($instagram_account_info['followers_count']) ? $instagram_account_info['followers_count'] : "";
-                            $data['insta_media_count'] = isset($instagram_account_info['media_count']) ? $instagram_account_info['media_count'] : "";
-                            $data['insta_website'] = isset($instagram_account_info['website']) ? $instagram_account_info['website'] : "";
-                            $data['insta_biography'] = isset($instagram_account_info['biography']) ? $instagram_account_info['biography'] : "";
-                        }
-                        // end of instagram section
+                            // إن كان الصف موجود ولم يتغيّر، علّمه is_imported=1
+                            if ($this->db->affected_rows() == 0) {
+                                try {
+                                    $this->db->where('subscribe_id', $db_client_id)
+                                             ->where('page_table_id', $page_table_id)
+                                             ->update('messenger_bot_subscriber', ['is_imported' => '1']);
+                                } catch (Exception $e) {
+                                    $logf("IMPORT_UPDATE_ERR page_table_id={$page_table_id} id={$db_client_id} err=" . $e->getMessage());
+                                }
+                            }
+                        } // foreach
 
-                        $where=array();
-                        $where['where'] = array('facebook_rx_fb_user_info_id'=>$facebook_table_id,'page_id'=>$page['id']);
-                        $exist_or_not = array();
-                        $exist_or_not = $this->basic->get_data('facebook_rx_fb_page_info',$where,$select='',$join='',$limit='',$start=NULL,$order_by='',$group_by='',$num_rows=0,$csv='',$delete_overwrite=1);
+                        $logf("IMPORTED page_table_id={$page_table_id} imported={$imported} total={$totalConvos} limit={$limit}");
 
-                        if(empty($exist_or_not))
-                        {
-                            $this->basic->insert_data('facebook_rx_fb_page_info',$data);
-                        }
-                        else
-                        {
-                            $where = array('facebook_rx_fb_user_info_id'=>$facebook_table_id,'page_id'=>$page['id']);
-                            $this->basic->update_data('facebook_rx_fb_page_info',$where,$data);
-                        }
-
-
-                    }
-                }
-
-                $group_list = array();
-                if($this->config->item('facebook_poster_group_enable_disable') == '1' && $this->is_group_posting_exist)
-                    $group_list = $this->fb_rx_login->get_group_list($access_token);
-
-
-                if(!empty($group_list))
-                {
-                    foreach($group_list as $group)
-                    {
-                        $user_id = $this->user_id;
-                        $group_access_token = $access_token; // group uses user access token
-                        $group_id = $group['id'];
-                        $group_cover = '';
-                        if(isset($group['cover']['source'])) $group_cover = $group['cover']['source'];
-                        $group_profile = '';
-                        if(isset($group['picture']['url'])) $group_profile = $group['picture']['url'];
-                        $group_name = '';
-                        if(isset($group['name'])) $group_name = $group['name'];
-
-                        $data = array(
-                            'user_id' => $user_id,
-                            'facebook_rx_fb_user_info_id' => $facebook_table_id,
-                            'group_id' => $group_id,
-                            'group_cover' => $group_cover,
-                            'group_profile' => $group_profile,
-                            'group_name' => $group_name,
-                            'group_access_token' => $group_access_token,
-                            'add_date' => date('Y-m-d'),
-                            'deleted' => '0'
-                            );
-
-                        $where=array();
-                        $where['where'] = array('facebook_rx_fb_user_info_id'=>$facebook_table_id,'group_id'=>$group['id']);
-                        $exist_or_not = array();
-                        $exist_or_not = $this->basic->get_data('facebook_rx_fb_group_info',$where,$select='',$join='',$limit='',$start=NULL,$order_by='',$group_by='',$num_rows=0,$csv='',$delete_overwrite=1);
-
-                        if(empty($exist_or_not))
-                        {
-                            $this->basic->insert_data('facebook_rx_fb_group_info',$data);
-                        }
-                        else
-                        {
-                            $where = array('facebook_rx_fb_user_info_id'=>$facebook_table_id,'group_id'=>$group['id']);
-                            $this->basic->update_data('facebook_rx_fb_group_info',$where,$data);
+                        // إعادة محاولة مؤجّلة إن لزم
+                        if ((int)$imported < (int)$totalConvos) {
+                            try {
+                                $php = defined('PHP_BINARY') ? PHP_BINARY : '/usr/bin/php';
+                                $index = defined('FCPATH') ? rtrim(FCPATH, '/\\') . DIRECTORY_SEPARATOR . 'index.php' : '/home/social/public_html/index.php';
+                                $delayed_seconds = 8;
+                                $delayed_cmd = 'nohup bash -c ' . escapeshellarg("sleep {$delayed_seconds}; {$php} -q " . escapeshellarg($index) . " bot_pull/bot_pull_cli/import_page " . (int)$page_table_id . " 150") . ' > /dev/null 2>&1 &';
+                                @exec($delayed_cmd);
+                                $logf("IMPORT_RETRY_SCHEDULED page_table_id={$page_table_id} after={$delayed_seconds}s");
+                            } catch (Exception $e) {
+                                $logf("IMPORT_RETRY_ERR page_table_id={$page_table_id} err=" . $e->getMessage());
+                            }
                         }
                     }
+                } catch (Exception $e) {
+                    log_message('error', 'manual_renew_account import error: ' . $e->getMessage());
+                    $logf("IMPORT ERROR page_table_id={$page_table_id} err=" . $e->getMessage());
                 }
-
-                $this->session->set_userdata('success_message', 'success');
-                redirect('social_accounts/index','location');                
-                exit();
             }
-            else
-            {
-                $data['error'] = 1;
-                $data['message'] = "'".$this->lang->line("something went wrong,please")."' <a href='".base_url("social_accounts/account_import")."'>'".$this->lang->line("try again")."'</a>";
-                $data['body'] = "facebook_rx/user_login";
-                $this->_viewcontroller($data);
+            // ---------- نهاية الاستيراد السريع ----------
+
+            // ---------- enqueue للـ bot-pull ----------
+            if (!function_exists('bot_pull_enqueue_page')) {
+                if (method_exists($this, 'load')) {
+                    @ $this->load->helper('bot_pull_helper');
+                }
+            }
+            if (function_exists('bot_pull_enqueue_page')) {
+                if ($page_table_id > 0 && !empty($pageData['page_access_token'])) {
+                    @bot_pull_enqueue_page($this, $page_table_id, $this->user_id);
+                    // optional: if (function_exists('bot_pull_kick_worker')) @bot_pull_kick_worker($this, 30);
+                }
+            }
+            // ---------- نهاية enqueue ----------
+        } // end foreach pages
+    } // end if page_list not empty
+
+    // المجموعات
+    $group_list = array();
+    if ($this->config->item('facebook_poster_group_enable_disable') == '1' && $this->is_group_posting_exist)
+        $group_list = $this->fb_rx_login->get_group_list($access_token);
+
+    if (!empty($group_list)) {
+        foreach ($group_list as $group) {
+            $user_id = $this->user_id;
+            $group_access_token = $access_token; // group uses user access token
+            $group_id = $group['id'];
+            $group_cover = isset($group['cover']['source']) ? $group['cover']['source'] : '';
+            $group_profile = isset($group['picture']['url']) ? $group['picture']['url'] : '';
+            $group_name = isset($group['name']) ? $group['name'] : '';
+
+            $gdata = array(
+                'user_id' => $user_id,
+                'facebook_rx_fb_user_info_id' => $facebook_table_id,
+                'group_id' => $group_id,
+                'group_cover' => $group_cover,
+                'group_profile' => $group_profile,
+                'group_name' => $group_name,
+                'group_access_token' => $group_access_token,
+                'add_date' => date('Y-m-d'),
+                'deleted' => '0'
+            );
+
+            $where = array();
+            $where['where'] = array('facebook_rx_fb_user_info_id' => $facebook_table_id, 'group_id' => $group['id']);
+            $exist_or_not = $this->basic->get_data('facebook_rx_fb_group_info', $where);
+
+            if (empty($exist_or_not)) {
+                $this->basic->insert_data('facebook_rx_fb_group_info', $gdata);
+            } else {
+                $where = array('facebook_rx_fb_user_info_id' => $facebook_table_id, 'group_id' => $group['id']);
+                $this->basic->update_data('facebook_rx_fb_group_info', $where, $gdata);
             }
         }
     }
 
+    $this->session->set_userdata('success_message', 'success');
+    redirect('social_accounts/index', 'location');
+}
     public function fb_rx_account_switch()
     {
         $this->ajax_check();
