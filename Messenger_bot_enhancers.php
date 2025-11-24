@@ -96,24 +96,354 @@ class Messenger_bot_enhancers extends Home
       $this->fb_rx_config_table_name="facebook_rx_config";
       $this->facebook_rx_config_id="facebook_rx_config_id";
      // Normalize platform language and load language files with English fallback
-        $raw = $this->config->item('language') ?: 'english';
-        $lang = strtolower($raw);
-        if ($lang === 'ar' || $lang === 'arabic') $lang = 'arabic';
-        elseif ($lang === 'en' || $lang === 'english') $lang = 'english';
-        else $lang = 'english';
+        $lang = $this->detect_platform_language();
 
-        // Load english as fallback then selected language to override
-        $this->lang->load('pro_templates_manager', 'english');
-        $this->lang->load('pro_templates_manager', $lang);
+// 2. وحّد القيمة على config (هذا السطر مهم جداً ليجعل باقي المنصة تستخدم نفس اللغة)
+$this->config->set_item('language', $lang);
 
-        $this->user_id = $this->session->userdata('user_id') ?: null;
-        $this->module_access = $this->session->userdata('module_access') ?: array();
+// 3. حمّل ملف اللغة الخاص بالموديول
+$this->lang->load('pro_templates_manager', 'english'); // حمّل الإنجليزية كقاعدة
+if ($lang != 'english') {
+    $this->lang->load('pro_templates_manager', $lang); // حمّل اللغة المختارة فوقها
+}
+// --- [نهاية تعديل اللغة الذكي] ---
+
+$this->user_id = $this->session->userdata('user_id') ?: null;
     }
+private function detect_platform_language(): string
+    {
+        // جرّب أشهر مفاتيح السيشن في المنصات
+        $candidates = [
+            $this->session->userdata('site_lang'),
+            $this->session->userdata('selected_language'),
+            $this->session->userdata('user_language'),
+            $this->session->userdata('app_language'),
+            $this->session->userdata('language'),
+            $this->config->item('language'),
+        ];
 
+        $lang = 'english';
+        foreach ($candidates as $v) {
+            if (!$v) continue;
+            $v = strtolower(trim((string)$v));
+            // خرّيط شائعة: en, en-us, ar, ar-sa, arabic, english
+            if (in_array($v, ['en','en-us','english'])) { $lang = 'english'; break; }
+            if (in_array($v, ['ar','ar-sa','arabic','العربية'])) { $lang = 'arabic'; break; }
+        }
+        return $lang;
+    }
     public function index()
     {
       $this->subscriber_broadcast_campaign();
     }
+
+private function _truncate_title($text, $limit = 80)
+{
+    $text = is_string($text) ? trim($text) : '';
+    if ($text === '') return '';
+    if (function_exists('mb_substr')) return mb_substr($text, 0, $limit);
+    return substr($text, 0, $limit);
+}
+
+// 2) Helper: اختيار لغة i18n مفضلة (ar ثم en أو العكس حسب إعداد اللغة)
+private function _prefer_locales()
+{
+    $pref = ['en','ar'];
+    $lang = strtolower($this->config->item('language') ?: '');
+    if (strpos($lang,'ar') !== false) $pref = ['ar','en'];
+    return $pref;
+}
+private function _i18n_pick($src, $key)
+{
+    if (!is_array($src)) return '';
+    $pref = $this->_prefer_locales();
+    if (!empty($src['i18n']) && is_array($src['i18n'])) {
+        foreach ($pref as $L) {
+            if (!empty($src['i18n'][$L][$key])) return $src['i18n'][$L][$key];
+        }
+    }
+    return isset($src[$key]) ? $src[$key] : '';
+}
+
+// 3) التطبيع: دعم generic_buttons + i18n + عناوين إجبارية
+private function normalize_saved_template_message($payload = array(), &$need_to_whitelist_array = array(), $white_listed_domain_array = array())
+{
+    if (!is_array($need_to_whitelist_array)) $need_to_whitelist_array = array();
+    if (!is_array($white_listed_domain_array)) $white_listed_domain_array = array();
+
+    // نص صِرف
+    if (is_string($payload) && trim($payload) !== '') {
+        return array('text' => $payload);
+    }
+    if (!is_array($payload)) $payload = array();
+    if (isset($payload['i18n'])) { /* نسيبه – هنقرأ منه بالقارئ أعلاه */ }
+
+    // Pickers
+    $pick_text = function($arr) {
+        foreach (array('text','message','preview_text','title','caption','subtitle') as $k) {
+            if (isset($arr[$k]) && is_string($arr[$k]) && trim($arr[$k])!=='') return $arr[$k];
+        }
+        return '';
+    };
+    $pick_image = function($arr) {
+        if (!empty($arr['image_url'])) return $arr['image_url'];
+        if (!empty($arr['picture'])) return $arr['picture'];
+        if (!empty($arr['image'])) return $arr['image'];
+        if (!empty($arr['attachment']['type']) && $arr['attachment']['type']==='image' && !empty($arr['attachment']['payload']['url'])) return $arr['attachment']['payload']['url'];
+        if (!empty($arr['elements'][0]['image_url'])) return $arr['elements'][0]['image_url'];
+        if (!empty($arr['message']['attachment']['type']) && $arr['message']['attachment']['type']==='image' && !empty($arr['message']['attachment']['payload']['url'])) return $arr['message']['attachment']['payload']['url'];
+        if (!empty($arr['message']['image_url'])) return $arr['message']['image_url'];
+        return '';
+    };
+    $extract_buttons = function($arr) {
+        // ندعم generic_buttons بالإضافة لـ buttons
+        if (!empty($arr['generic_buttons']) && is_array($arr['generic_buttons'])) return $arr['generic_buttons'];
+        if (!empty($arr['buttons']) && is_array($arr['buttons'])) return $arr['buttons'];
+        if (!empty($arr['message']['buttons']) && is_array($arr['message']['buttons'])) return $arr['message']['buttons'];
+        if (!empty($arr['elements'][0]['buttons']) && is_array($arr['elements'][0]['buttons'])) return $arr['elements'][0]['buttons'];
+        return array();
+    };
+
+    // 1) payload['message']
+    if (isset($payload['message'])) {
+        if (is_string($payload['message']) && trim($payload['message'])!=='') {
+            $buttons = $extract_buttons($payload);
+            $img = $pick_image($payload);
+            // i18n title/subtitle على الروت لو وجدت
+            $title_i18n = $this->_i18n_pick($payload, 'title');
+            $subtitle_i18n = $this->_i18n_pick($payload, 'subtitle');
+
+            $text = $payload['message'];
+            if (!empty($buttons)) {
+                if (!empty($img)) {
+                    $title = $this->_truncate_title($title_i18n ?: $text ?: ($this->lang->line('View details') ?: 'View details'));
+                    $el = array(
+                        'title' => $title !== '' ? $title : ($this->lang->line('View details') ?: 'View details'),
+                        'image_url' => $img,
+                        'buttons' => $this->map_buttons($buttons, $need_to_whitelist_array, $white_listed_domain_array)
+                    );
+                    if (!empty($subtitle_i18n)) $el['subtitle'] = $this->_truncate_title($subtitle_i18n);
+                    return $this->build_generic_template_message(array($el));
+                } else {
+                    return $this->build_button_template_message($text, $buttons, $need_to_whitelist_array, $white_listed_domain_array);
+                }
+            }
+            return array('text' => $text);
+        }
+
+        if (is_array($payload['message'])) {
+            $msg = $payload['message'];
+            $buttons = $extract_buttons(array('message'=>$msg));
+            $img = $pick_image(array('message'=>$msg));
+            $text = isset($msg['text']) ? $msg['text'] : $pick_text($payload);
+
+            if (!empty($buttons) && !empty($img)) {
+                $title = $this->_truncate_title($text ?: ($this->lang->line('View details') ?: 'View details'));
+                $el = array(
+                    'title' => $title !== '' ? $title : ($this->lang->line('View details') ?: 'View details'),
+                    'image_url' => $img,
+                    'buttons' => $this->map_buttons($buttons, $need_to_whitelist_array, $white_listed_domain_array)
+                );
+                if (!empty($msg['subtitle'])) $el['subtitle'] = $this->_truncate_title($msg['subtitle']);
+                if (!empty($msg['default_action']['url'])) $el['default_action'] = array('type'=>'web_url','url'=>$msg['default_action']['url']);
+                return $this->build_generic_template_message(array($el));
+            }
+
+            if (!empty($buttons)) {
+                return $this->build_button_template_message($text ?: ($this->lang->line('Choose an option') ?: 'Choose an option'), $buttons, $need_to_whitelist_array, $white_listed_domain_array);
+            }
+
+            if (isset($msg['image_url']) || isset($msg['title']) || isset($msg['subtitle'])) {
+                $title = !empty($msg['title']) ? $msg['title'] : ($text ?: ($this->lang->line('View details') ?: 'View details'));
+                $el = array('title' => $this->_truncate_title($title));
+                if (!empty($msg['subtitle'])) $el['subtitle'] = $this->_truncate_title($msg['subtitle']);
+                if (!empty($msg['image_url'])) $el['image_url'] = $msg['image_url'];
+                if (!empty($msg['default_action']['url'])) $el['default_action'] = array('type'=>'web_url','url'=>$msg['default_action']['url']);
+                if (!empty($msg['buttons']) && is_array($msg['buttons'])) $el['buttons'] = $this->map_buttons($msg['buttons'], $need_to_whitelist_array, $white_listed_domain_array);
+                return $this->build_generic_template_message(array($el));
+            }
+
+            return $msg;
+        }
+    }
+
+    // 2) Root-level buttons (generic_buttons/ buttons) + image/title/subtitle (i18n-aware)
+    $buttons = $extract_buttons($payload);
+    if (!empty($buttons)) {
+        $title_i18n = $this->_i18n_pick($payload, 'title');
+        $subtitle_i18n = $this->_i18n_pick($payload, 'subtitle');
+        $text = $title_i18n ?: $pick_text($payload) ?: ($this->lang->line('Choose an option') ?: 'Choose an option');
+        $img  = $pick_image($payload);
+
+        if (!empty($img)) {
+            $el = array(
+                'title' => $this->_truncate_title($text ?: ($this->lang->line('View details') ?: 'View details')),
+                'image_url' => $img,
+                'buttons' => $this->map_buttons($buttons, $need_to_whitelist_array, $white_listed_domain_array)
+            );
+            if (!empty($subtitle_i18n)) $el['subtitle'] = $this->_truncate_title($subtitle_i18n);
+            if (!empty($payload['default_action']['url'])) $el['default_action'] = array('type'=>'web_url','url'=>$payload['default_action']['url']);
+            return $this->build_generic_template_message(array($el));
+        }
+        return $this->build_button_template_message($text, $buttons, $need_to_whitelist_array, $white_listed_domain_array);
+    }
+
+    // 3) Root-level elements → enforce title fallback per element (i18n-aware)
+    if (!empty($payload['elements']) && is_array($payload['elements'])) {
+        $elements = array();
+        foreach ($payload['elements'] as $el) {
+            if (isset($el['i18n'])) { /* نقرأ منها أدناه */ }
+
+            $title = $this->_i18n_pick($el,'title');
+            if ($title==='') {
+                if (!empty($el['title'])) $title = $el['title'];
+                else if (!empty($el['text'])) $title = $el['text'];
+                else if (!empty($el['subtitle'])) $title = $el['subtitle'];
+                else $title = ($this->lang->line('View details') ?: 'View details');
+            }
+            $title = $this->_truncate_title($title);
+
+            $new = array('title' => ($title !== '' ? $title : ($this->lang->line('View details') ?: 'View details')));
+            $subtitle = $this->_i18n_pick($el,'subtitle');
+            if ($subtitle==='') $subtitle = isset($el['subtitle']) ? $el['subtitle'] : '';
+            if ($subtitle!=='') $new['subtitle'] = $this->_truncate_title($subtitle);
+
+            if (!empty($el['image_url'])) $new['image_url'] = $el['image_url'];
+            if (!empty($el['default_action']['url'])) $new['default_action'] = array('type'=>'web_url','url'=>$el['default_action']['url']);
+            if (!empty($el['buttons']) && is_array($el['buttons'])) $new['buttons'] = $this->map_buttons($el['buttons'], $need_to_whitelist_array, $white_listed_domain_array);
+            $elements[] = $new;
+        }
+        return $this->build_generic_template_message($elements);
+    }
+
+    // 4) Attachment as-is
+    if (!empty($payload['attachment']) && is_array($payload['attachment'])) {
+        return array('attachment' => $payload['attachment']);
+    }
+
+    // 5) Single image hint ONLY إذا لم ننجح في بناء Generic/Button
+    if (!empty($payload['image_url'])) {
+        return array(
+            'attachment' => array(
+                'type' => 'image',
+                'payload' => array('url' => $payload['image_url'], 'is_reusable' => true)
+            )
+        );
+    }
+
+    // 6) Prefer obvious text
+    $text = $pick_text($payload);
+    if ($text!=='') return array('text' => $text);
+
+    return array('text' => json_encode($payload, JSON_UNESCAPED_UNICODE));
+}
+
+
+
+private function build_button_template_message($text, $buttons, &$need_to_whitelist_array = array(), $white_listed_domain_array = array())
+{
+    if (!is_array($need_to_whitelist_array)) $need_to_whitelist_array = array();
+    if (!is_array($white_listed_domain_array)) $white_listed_domain_array = array();
+
+    $mapped = $this->map_buttons($buttons, $need_to_whitelist_array, $white_listed_domain_array);
+    return array(
+        'attachment' => array(
+            'type' => 'template',
+            'payload' => array(
+                'template_type' => 'button',
+                'text' => $text ?: ($this->lang->line('Choose an option') ?: 'Choose an option'),
+                'buttons' => $mapped
+            )
+        )
+    );
+}
+
+private function build_generic_template_message($elements = array())
+{
+    if (!is_array($elements)) $elements = array();
+
+    $normalized = array();
+    foreach ($elements as $el) {
+        if (!is_array($el)) $el = array();
+
+        $title = '';
+        if (!empty($el['title'])) $title = $el['title'];
+        else if (!empty($el['text'])) $title = $el['text'];
+        else if (!empty($el['subtitle'])) $title = $el['subtitle'];
+        else $title = ($this->lang->line('View details') ?: 'View details');
+        $title = $this->_truncate_title($title);
+
+        $new = array('title' => ($title !== '' ? $title : ($this->lang->line('View details') ?: 'View details')));
+        if (!empty($el['subtitle'])) $new['subtitle'] = $this->_truncate_title($el['subtitle']);
+        if (!empty($el['image_url'])) $new['image_url'] = $el['image_url'];
+
+        if (!empty($el['default_action']['url'])) {
+            $new['default_action'] = array('type'=>'web_url','url'=>$el['default_action']['url']);
+        }
+        if (!empty($el['buttons']) && is_array($el['buttons'])) $new['buttons'] = $el['buttons'];
+
+        $normalized[] = $new;
+    }
+
+    return array(
+        'attachment' => array(
+            'type' => 'template',
+            'payload' => array(
+                'template_type' => 'generic',
+                'elements' => $normalized
+            )
+        )
+    );
+}
+private function map_buttons($buttons = array(), &$need_to_whitelist_array = array(), $white_listed_domain_array = array())
+{
+    if (!is_array($buttons)) $buttons = array();
+    if (!is_array($need_to_whitelist_array)) $need_to_whitelist_array = array();
+    if (!is_array($white_listed_domain_array)) $white_listed_domain_array = array();
+
+    $pref = $this->_prefer_locales();
+    $out = array();
+
+    foreach ($buttons as $b) {
+        if (isset($b['i18n'])) unset($b['i18n']); // إن وجدت على مستوى الزر نفسه
+
+        // عنوان الزر يدعم title_i18n
+        $title = '';
+        if (!empty($b['title_i18n']) && is_array($b['title_i18n'])) {
+            foreach ($pref as $L) {
+                if (!empty($b['title_i18n'][$L])) { $title = $b['title_i18n'][$L]; break; }
+            }
+        }
+        if ($title==='') $title = isset($b['title']) ? $b['title'] : (isset($b['text']) ? $b['text'] : ($this->lang->line('Button') ?: 'Button'));
+
+        $type  = isset($b['type']) ? $b['type'] : '';
+        $url   = isset($b['url']) ? $b['url'] : (isset($b['web_url']) ? $b['web_url'] : '');
+        $payload = isset($b['payload']) ? $b['payload'] : (isset($b['postback_id']) ? $b['postback_id'] : '');
+
+        if ($type === '' && $url !== '') $type = 'web_url';
+        if ($type === '' && $payload !== '') $type = 'postback';
+
+        if ($type === 'web_url') {
+            if ($url != '') $url = add_query_string_to_url($url,"subscriber_id","#SUBSCRIBER_ID_REPLACE#");
+            $btn = array('type'=>'web_url','url'=>$url,'title'=>$title);
+            if (!empty($b['webview_height_ratio'])) {
+                $btn['messenger_extensions'] = 'true';
+                $btn['webview_height_ratio'] = $b['webview_height_ratio'];
+            }
+            $out[] = $btn;
+
+            if ($url && !in_array($url, (array)$white_listed_domain_array)) $need_to_whitelist_array[] = $url;
+        }
+        elseif ($type === 'postback') {
+            if ($title && $payload) $out[] = array('type'=>'postback','title'=>$title,'payload'=>$payload);
+        }
+        elseif ($type === 'phone_number') {
+            $phone = isset($b['phone']) ? $b['phone'] : (isset($b['payload']) ? $b['payload'] : (isset($b['call_us']) ? $b['call_us'] : ''));
+            if ($title && $phone) $out[] = array('type'=>'phone_number','title'=>$title,'payload'=>$phone);
+        }
+    }
+    return $out;
+}
    public function pro_templates_manager()
     {
         if ($this->session->userdata('user_type') != 'Admin' && !in_array(211, $this->module_access)) {
@@ -252,7 +582,12 @@ class Messenger_bot_enhancers extends Home
             ));
         }
     }
-
+public function get_pages_by_profile()
+{
+    $profile_id = $this->input->post('profile_id');
+    $pages = $this->db->get_where('facebook_pages', ['facebook_rx_fb_user_info_id' => $profile_id])->result_array();
+    echo json_encode(['pages' => $pages]);
+}
     public function delete_template_action()
     {
         $this->output->set_content_type('application/json; charset=utf-8');
@@ -303,8 +638,263 @@ class Messenger_bot_enhancers extends Home
         }
         return '';
     }
+public function ajax_get_campaigns_by_filter()
+{
+    $this->ajax_check();
+    $this->csrf_token_check();
 
+    if ($this->session->userdata('user_type') != 'Admin' && !in_array(211, $this->module_access)) {
+        echo json_encode(['status' => 'error', 'message' => 'permission_denied']);
+        exit;
+    }
 
+    $raw_filter = trim($this->input->post('filter', true));
+    $filter = $raw_filter === '' ? 'processing' : strtolower($raw_filter);
+    $timeframe = trim($this->input->post('timeframe', true)); // optional
+
+    $table = 'messenger_bot_broadcast_serial';
+    $this->db->from($table);
+
+    if ($filter === 'processing' || $filter === 'running') {
+        $this->db->where('posting_status', 1);
+    } elseif ($filter === 'pending') {
+        $this->db->where('posting_status', 0);
+    } elseif ($filter === 'completed') {
+        // Broaden completed detection:
+        // - posting_status = 2
+        // - OR completed_at IS NOT NULL
+        // - OR successfully_sent >= total_thread (when total_thread > 0)
+        $has_completed_at = $this->db->field_exists('completed_at', $table);
+        $has_total_thread = $this->db->field_exists('total_thread', $table);
+        $has_successfully_sent = $this->db->field_exists('successfully_sent', $table);
+
+        // open group for OR conditions
+        $this->db->group_start();
+        $this->db->where('posting_status', 2);
+
+        if ($has_completed_at) {
+            $this->db->or_where('completed_at IS NOT NULL', null, false);
+        }
+
+        if ($has_total_thread && $has_successfully_sent) {
+            // add condition successfully_sent >= total_thread AND total_thread > 0
+            $this->db->or_where('(`successfully_sent` >= `total_thread` AND `total_thread` > 0)', null, false);
+        }
+
+        $this->db->group_end();
+
+        // Optional timeframe applied to completed_at if requested and column exists
+        if (!empty($timeframe) && $has_completed_at) {
+            if ($timeframe === 'today') {
+                $this->db->where("DATE(`completed_at`) = CURDATE()", null, false);
+            } elseif ($timeframe === '24h') {
+                $this->db->where("`completed_at` >= DATE_SUB(NOW(), INTERVAL 24 HOUR)", null, false);
+            }
+        }
+    } else {
+        // unknown filter -> no rows
+        $this->db->where('0', '1', false);
+    }
+
+    // Limit to user's campaigns if not admin
+    if ($this->session->userdata('user_type') != 'Admin') {
+        $this->db->where('user_id', $this->user_id);
+    }
+
+    // Order by most relevant timestamp available
+    if ($this->db->field_exists('completed_at', $table)) {
+        $this->db->order_by('completed_at', 'DESC');
+    } elseif ($this->db->field_exists('created_at', $table)) {
+        $this->db->order_by('created_at', 'DESC');
+    } else {
+        $this->db->order_by('id', 'DESC');
+    }
+
+    try {
+        $query = $this->db->get();
+        $campaigns = $query->result_array();
+    } catch (Exception $ex) {
+        log_message('error', "ajax_get_campaigns_by_filter DB error: " . $ex->getMessage());
+        echo json_encode(['status' => 'error', 'message' => $this->lang->line('Something went wrong.')]);
+        exit;
+    }
+
+    // Group by fb_page_id and build HTML (unchanged presentation)
+    $by_page = [];
+    foreach ($campaigns as $c) {
+        $pid = isset($c['fb_page_id']) && $c['fb_page_id'] !== '' ? $c['fb_page_id'] : 'unknown';
+        if (!isset($by_page[$pid])) $by_page[$pid] = ['page_name' => ($c['page_name'] ?? ''), 'items' => []];
+        $by_page[$pid]['items'][] = $c;
+    }
+
+    $html = '<div class="running-campaigns-list">';
+    if (empty($by_page)) {
+        $html .= '<div class="alert alert-info">' . $this->lang->line('No campaigns found for this filter.') . '</div>';
+    } else {
+        foreach ($by_page as $pid => $group) {
+            $page_name_safe = htmlspecialchars($group['page_name']);
+            $html .= '<div class="card mb-3 shadow-sm">';
+            $html .= '<div class="card-header d-flex justify-content-between align-items-center">';
+            $html .= '<div><strong>' . $page_name_safe . '</strong> <small class="text-muted ml-2">(' . htmlspecialchars($pid) . ')</small></div>';
+            $html .= '<div><span class="badge badge-primary">' . count($group['items']) . ' ' . $this->lang->line('Campaigns') . '</span></div>';
+            $html .= '</div>';
+            $html .= '<div class="card-body p-2"><div class="list-group">';
+            foreach ($group['items'] as $it) {
+                $name = htmlspecialchars($it['campaign_name'] ?? $this->lang->line('Untitled'));
+                $type = htmlspecialchars($it['template_type'] ?? $it['broadcast_type'] ?? $this->lang->line('N/A'));
+                $scheduled = htmlspecialchars($it['schedule_time'] ?? $it['created_at'] ?? '');
+                $sent = intval($it['successfully_sent'] ?? $it['sent_count'] ?? 0);
+                $total = intval($it['total_thread'] ?? 0);
+                $completed_at = isset($it['completed_at']) ? htmlspecialchars($it['completed_at']) : '';
+
+                switch ((string)($it['posting_status'] ?? '')) {
+                    case '0': $status_label = '<span class="badge badge-secondary">'.$this->lang->line('Pending').'</span>'; break;
+                    case '1': $status_label = '<span class="badge badge-warning">'.$this->lang->line('Processing').'</span>'; break;
+                    case '2': $status_label = '<span class="badge badge-success">'.$this->lang->line('Completed').'</span>'; break;
+                    default:  $status_label = '<span class="badge badge-light">'.$this->lang->line('Unknown').'</span>'; break;
+                }
+
+                $html .= '<div class="list-group-item d-flex justify-content-between align-items-center">';
+                $html .= '<div class="mr-2" style="min-width:55%">';
+                $html .= '<div class="font-weight-bold">' . $name . ' ' . $status_label . '</div>';
+                $html .= '<div class="small text-muted">' . $this->lang->line('Type') . ': ' . $type;
+                if (!empty($scheduled)) $html .= ' • ' . $this->lang->line('Scheduled at') . ': ' . $scheduled;
+                if (!empty($completed_at)) $html .= ' • ' . $this->lang->line('Completed at') . ': ' . $completed_at;
+                $html .= '</div></div>';
+
+                $html .= '<div class="text-right" style="min-width:180px">';
+                $html .= '<div class="d-block">' . $sent . ' / ' . $total . ' <small class="text-muted">' . $this->lang->line('Sent') . '</small></div>';
+                $html .= '<div class="mt-2">';
+                $html .= '<a href="javascript:void(0)" class="btn btn-sm btn-outline-primary sent_report" cam-id="' . intval($it['id']) . '">' . $this->lang->line('View Report') . '</a> ';
+                $html .= '<a href="' . site_url('messenger_bot_enhancers/edit/' . intval($it['id'])) . '" class="btn btn-sm btn-outline-secondary">' . $this->lang->line('Edit') . '</a>';
+                $html .= '</div></div>';
+                $html .= '</div>';
+            }
+            $html .= '</div></div></div>';
+        }
+    }
+    $html .= '</div>';
+
+    echo json_encode(['status' => 'success', 'html' => $html, 'filter' => $filter]);
+    exit;
+}
+public function get_templates()
+{
+    $this->output->set_content_type('application/json; charset=utf-8');
+    try {
+        if (empty($this->user_id)) throw new Exception('Unauthorized');
+        $rows = $this->db->order_by('updated_at', 'DESC')->get_where('pro_templates', array('user_id' => $this->user_id))->result_array();
+        echo json_encode(array('status' => '1', 'templates' => $rows, 'csrf_hash' => $this->security->get_csrf_hash()));
+    } catch (Exception $e) {
+        echo json_encode(array('status' => '0', 'message' => $this->security->xss_clean($e->getMessage()), 'csrf_hash' => $this->security->get_csrf_hash()));
+    }
+}
+
+public function get_template_detail()
+{
+    $this->output->set_content_type('application/json; charset=utf-8');
+    try {
+        if (empty($this->user_id)) throw new Exception('Unauthorized');
+        $id = (int)$this->input->get('id');
+        if (!$id) throw new Exception('Template id required');
+
+        $row = $this->db->get_where('pro_templates', array('id' => $id, 'user_id' => $this->user_id))->row_array();
+        if (!$row) throw new Exception('Template not found');
+
+        $payload = array();
+        if (!empty($row['payload'])) {
+            $decoded = json_decode($row['payload'], true);
+            if (is_array($decoded)) $payload = $decoded;
+        }
+
+        $template = array(
+            'id' => (int)$row['id'],
+            'template_name' => isset($row['title']) ? $row['title'] : (isset($row['template_name']) ? $row['template_name'] : ''),
+            'preview_text' => isset($payload['preview_text']) ? $payload['preview_text'] : (isset($payload['text']) ? $payload['text'] : ''),
+            'preview_image' => isset($payload['preview_image']) ? $payload['preview_image'] : (isset($row['image_url']) ? $row['image_url'] : ''),
+            'message' => $payload,
+            'raw' => $row
+        );
+
+        echo json_encode(array('status' => '1', 'template' => $template, 'csrf_hash' => $this->security->get_csrf_hash()));
+    } catch (Exception $e) {
+        echo json_encode(array('status' => '0', 'message' => $this->security->xss_clean($e->getMessage()), 'csrf_hash' => $this->security->get_csrf_hash()));
+    }
+}
+
+public function list_pages_with_counts()
+{
+    // JSON output
+    $this->output->set_content_type('application/json; charset=utf-8');
+
+    try {
+        if (empty($this->user_id)) {
+            throw new Exception('Unauthorized');
+        }
+
+        // احصل على معرف الحساب المطلوب لو وجد (من POST)
+        $profile_id = $this->input->post('profile_id');
+
+        // جملة WHERE ديناميكية حسب اختيار الحساب
+        $bind_params = [$this->user_id, $this->user_id]; // للعداد + الصفحات
+        $profile_condition = '';
+
+        if (!empty($profile_id)) {
+            $profile_condition = " AND p.facebook_rx_fb_user_info_id = ? ";
+            $bind_params[] = $profile_id;
+        }
+
+        $sql = "
+            SELECT 
+                p.id AS id,                                  -- DB id (page_table_id)
+                p.page_id AS fb_page_id,                     -- Facebook Page ID الحقيقي
+                p.page_name,
+                p.username,                                  -- قد يكون فارغ
+                p.page_profile,
+                p.page_access_token,
+                COALESCE(s.cnt, 0) AS subscriber_count
+            FROM facebook_rx_fb_page_info p
+            LEFT JOIN (
+                SELECT page_table_id, COUNT(*) AS cnt
+                FROM messenger_bot_subscriber
+                WHERE user_id = ? AND unavailable = '0' AND is_bot_subscriber = '1'
+                GROUP BY page_table_id
+            ) s ON s.page_table_id = p.id
+            WHERE p.user_id = ? AND p.deleted = '0'
+            $profile_condition
+            ORDER BY p.page_name ASC
+        ";
+
+        $rows = $this->db->query($sql, $bind_params)->result_array();
+
+        $result = [];
+        foreach ($rows as $p) {
+            $result[] = [
+                'id'                => (int)($p['id'] ?? 0),
+                'page_name'         => $p['page_name'] ?? '',
+                'subscriber_count'  => (int)($p['subscriber_count'] ?? 0),
+                'page_access_token' => $p['page_access_token'] ?? '',
+                'default_checked'   => false,
+                'fb_page_id'        => $p['fb_page_id'] ?? '',
+                'username'          => $p['username'] ?? '',
+                'page_profile'      => $p['page_profile'] ?? '',
+            ];
+        }
+
+        echo json_encode([
+            'status'    => '1',
+            'pages'     => $result,
+            'csrf_hash' => $this->security->get_csrf_hash()
+        ], JSON_UNESCAPED_UNICODE);
+
+    } catch (Exception $e) {
+        echo json_encode([
+            'status'    => '0',
+            'message'   => $this->security->xss_clean($e->getMessage()),
+            'csrf_hash' => $this->security->get_csrf_hash()
+        ], JSON_UNESCAPED_UNICODE);
+    }
+}
     public function estimate_reach()
     {
         $this->ajax_check();
@@ -771,156 +1361,138 @@ In this case, we suggest you to check the error message in report, and if you th
 
 
     public function campaign_sent_status()
-    {
-        $this->ajax_check();
-        $this->csrf_token_check();
-        if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access)) exit();
-        
-        $id = $this->input->post("id");
+{
+    $this->ajax_check();
+    $this->csrf_token_check();
+    if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access)) exit();
+    
+    $id = $this->input->post("id");
 
-        $campaign_data = $this->basic->get_data("messenger_bot_broadcast_serial",array("where"=>array("id"=>$id,"user_id"=>$this->user_id)));
-        $report = isset($campaign_data[0]["report"]) ? json_decode($campaign_data[0]["report"],true) : array();
-        $campaign_name  = isset($campaign_data[0]["campaign_name"]) ? $campaign_data[0]["campaign_name"] : "";
-        $total_thread  = isset($campaign_data[0]["total_thread"]) ? $campaign_data[0]["total_thread"] : 0;
-        $successfully_sent  = isset($campaign_data[0]["successfully_sent"]) ? $campaign_data[0]["successfully_sent"] : 0;
-        $successfully_delivered  = isset($campaign_data[0]["successfully_delivered"]) ? $campaign_data[0]["successfully_delivered"] : 0;
-        $successfully_opened  = isset($campaign_data[0]["successfully_opened"]) ? $campaign_data[0]["successfully_opened"] : 0;
-        $successfully_clicked  = isset($campaign_data[0]["successfully_clicked"]) ? $campaign_data[0]["successfully_clicked"] : 0;
-        $error_message  = isset($campaign_data[0]["error_message"]) ? $campaign_data[0]["error_message"] : "";
-        $page_name  = isset($campaign_data[0]["page_name"]) ? $campaign_data[0]["page_name"] : "";
-        $fb_page_id  = isset($campaign_data[0]["fb_page_id"]) ? $campaign_data[0]["fb_page_id"] : "";
+    $campaign_data = $this->basic->get_data("messenger_bot_broadcast_serial",array("where"=>array("id"=>$id,"user_id"=>$this->user_id)));
+    $report = isset($campaign_data[0]["report"]) ? json_decode($campaign_data[0]["report"],true) : array();
+    $campaign_name  = isset($campaign_data[0]["campaign_name"]) ? $campaign_data[0]["campaign_name"] : "";
+    $total_thread  = isset($campaign_data[0]["total_thread"]) ? $campaign_data[0]["total_thread"] : 0;
+    $successfully_sent  = isset($campaign_data[0]["successfully_sent"]) ? $campaign_data[0]["successfully_sent"] : 0;
+    $successfully_delivered  = isset($campaign_data[0]["successfully_delivered"]) ? $campaign_data[0]["successfully_delivered"] : 0;
+    $successfully_opened  = isset($campaign_data[0]["successfully_opened"]) ? $campaign_data[0]["successfully_opened"] : 0;
+    $successfully_clicked  = isset($campaign_data[0]["successfully_clicked"]) ? $campaign_data[0]["successfully_clicked"] : 0;
+    $error_message  = isset($campaign_data[0]["error_message"]) ? $campaign_data[0]["error_message"] : "";
+    $page_name  = isset($campaign_data[0]["page_name"]) ? $campaign_data[0]["page_name"] : "";
+    $fb_page_id  = isset($campaign_data[0]["fb_page_id"]) ? $campaign_data[0]["fb_page_id"] : "";
 
-        
-        if($successfully_sent==0) $sent_rate=0;
-        else $sent_rate=($successfully_sent/$total_thread)*100;
-
-        if($successfully_delivered==0) $delivery_rate=0;
-        else $delivery_rate=($successfully_delivered/$successfully_sent)*100;
-
-        if($successfully_opened==0) $open_rate=0;
-        else $open_rate=($successfully_opened/$successfully_sent)*100;
-
-        if($successfully_clicked==0) $click_rate=0;
-        else $click_rate=($successfully_clicked/$successfully_sent)*100;
-
-
-        $sent_rate = round($sent_rate);
-        $delivery_rate = round($delivery_rate);
-        $open_rate = round($open_rate);
-        $click_rate = round($click_rate);
-
-        $posting_status = $campaign_data[0]['posting_status'];
-
-        if( $posting_status == '2') $posting_status = '<span class="text-success"> ('.$this->lang->line("Completed").')</span>';
-        else if( $posting_status == '1') $posting_status = '<span class="text-warning"> ('.$this->lang->line("Processing").')</span>';
-        else if( $posting_status == '3') $posting_status = '<span class="text-muted"> ('.$this->lang->line("Paused").')</span>';
-        else if( $posting_status == '4') $posting_status = '<span class="text-dark"> ('.$this->lang->line("On-hold").')</span>';
-        else $posting_status = '<span class="text-danger"> ('.$this->lang->line("Pending").')</span>';
-
-
-        $response = "";
-
-        $drop_menu = "";
-        $send_where_it_is_left_off = "";
-
-        if($campaign_data[0]['posting_status']=='4')
-        {            
-        $drop_menu = '<div class="btn-group dropleft float-right"><button type="button" class="btn btn-primary btn-lg dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">'.$this->lang->line("Options").'  </button>  <div class="dropdown-menu dropleft"> <a class="dropdown-item has-icon restart_button pointer" title="'.$this->lang->line('If the campaign has been completed due to error but there are still some subscriber to be sent, you can resume it from it was left off by force.').'" data-toggle="tooltip" table_id="'.$id.'"><i class="fas fa-sync"></i> '.$this->lang->line("Force Resume").'</a></div> </div>';
-        }
-
-        if($error_message!="")
-        $response .= "<div class='alert alert-danger text-center'> {$this->lang->line("Something went wrong for one or more message. Original error message :")} {$error_message} <br><a class='pointer' style='text-decoration:underline;' href='' data-toggle='modal' data-target='#error_message_learn'>".$this->lang->line("Learn more about common error messages")."</a></div>";
-
-
-        // $response .= "<div class='row'><h6 style='width:100%;padding:0 20px'><span class='float-left'>".$campaign_name." : <a href='https://facebook.com/".$fb_page_id."'>".$page_name."</a></span> <span class='float-right'>".$posting_status."</span></h6></div>";
-
-        $response .='
-        <div class="row">
-        <div class="col-12 col-sm-6 col-md-6 col-lg-3">
-            <div class="card card-statistic-1">
-              <div class="card-icon bg-primary">
-                <i class="fas fa-info-circle"></i>
-              </div>
-              <div class="card-wrap">
-                <div class="card-header">
-                  <h4>'. $this->lang->line("Campaign").$posting_status.'</h4>
-                </div>
-                <div class="card-body">
-                  '.$campaign_name.'
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="col-12 col-sm-6 col-md-6 col-lg-3">
-            <div class="card card-statistic-1">
-              <div class="card-icon bg-primary">
-                <i class="far fa-newspaper"></i>
-              </div>
-              <div class="card-wrap">
-                <div class="card-header">
-                  <h4>'.$this->lang->line("Page Name").'</h4>
-                </div>
-                <div class="card-body">
-                  <a target="_BLANK" href="https://facebook.com/'.$campaign_data[0]["fb_page_id"].'">'.$campaign_data[0]["page_name"].'</a>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="col-12 col-sm-6 col-md-6 col-lg-3">
-            <div class="card card-statistic-1">
-              <div class="card-icon bg-primary">
-                <i class="far fa-paper-plane"></i>
-              </div>
-              <div class="card-wrap">
-                <div class="card-header">
-                  <h4>'.$this->lang->line("Sent").' ('.$sent_rate.'%)</h4>
-                </div>
-                <div class="card-body">
-                  '.$successfully_sent.'/'.$total_thread.'</a>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="col-12 col-sm-6 col-md-6 col-lg-3">
-            <div class="card card-statistic-1">
-              <div class="card-icon bg-primary">
-                <i class="fas fa-check-circle"></i>
-              </div>
-              <div class="card-wrap">
-                <div class="card-header">
-                  <h4>'.$this->lang->line("Delivered").' ('.$delivery_rate.'%)</h4>
-                </div>
-                <div class="card-body">
-                  '.$successfully_delivered.'/'.$total_thread.'
-                </div>
-              </div>
-            </div>
-          </div>
-          <!--<div class="col-md-4 col-12">
-            <div class="card card-statistic-1">
-              <div class="card-icon bg-primary">
-                <i class="fas fa-eye"></i>
-              </div>
-              <div class="card-wrap">
-                <div class="card-header">
-                  <h4>'.$this->lang->line("Opened").' ('.$open_rate.'%)</h4>
-                </div>
-                <div class="card-body">
-                  '.$successfully_opened.'/'.$total_thread.'
-                </div>
-              </div>
-            </div>
-          </div>-->
-
-        </div>
-        <style>
-        .card-statistic-1{border:.5px solid #dee2e6;border-radius: 4px;}
-        .card-statistic-1 .card-icon i{font-size:40px !important;margin-top:20px;}
-        </style>';       
-
-        echo json_encode(array("response1"=>$response,"response3"=>$drop_menu));
+    // حماية ضد القسمة على صفر: تحقق من المقسوم عليه الصحيح
+    if ($total_thread == 0) {
+        $sent_rate = 0;
+    } else {
+        $sent_rate = ($successfully_sent / $total_thread) * 100;
     }
 
+    if ($successfully_sent == 0) {
+        $delivery_rate = 0;
+        $open_rate = 0;
+        $click_rate = 0;
+    } else {
+        $delivery_rate = ($successfully_delivered / $successfully_sent) * 100;
+        $open_rate     = ($successfully_opened / $successfully_sent) * 100;
+        $click_rate    = ($successfully_clicked / $successfully_sent) * 100;
+    }
+
+    $sent_rate = round($sent_rate);
+    $delivery_rate = round($delivery_rate);
+    $open_rate = round($open_rate);
+    $click_rate = round($click_rate);
+
+    $posting_status = isset($campaign_data[0]['posting_status']) ? $campaign_data[0]['posting_status'] : '';
+
+    if( $posting_status == '2') $posting_status = '<span class="text-success"> ('.$this->lang->line("Completed").')</span>';
+    else if( $posting_status == '1') $posting_status = '<span class="text-warning"> ('.$this->lang->line("Processing").')</span>';
+    else if( $posting_status == '3') $posting_status = '<span class="text-muted"> ('.$this->lang->line("Paused").')</span>';
+    else if( $posting_status == '4') $posting_status = '<span class="text-dark"> ('.$this->lang->line("On-hold").')</span>';
+    else $posting_status = '<span class="text-danger"> ('.$this->lang->line("Pending").')</span>';
+
+    $response = "";
+
+    $drop_menu = "";
+    $send_where_it_is_left_off = "";
+
+    if(isset($campaign_data[0]['posting_status']) && $campaign_data[0]['posting_status']=='4')
+    {            
+        $drop_menu = '<div class="btn-group dropleft float-right"><button type="button" class="btn btn-primary btn-lg dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">'.$this->lang->line("Options").'  </button>  <div class="dropdown-menu dropleft"> <a class="dropdown-item has-icon restart_button pointer" title="'.$this->lang->line('If the campaign has been completed due to error but there are still some subscriber to be sent, you can resume it from it was left off by force.').'" data-toggle="tooltip" table_id="'.$id.'"><i class="fas fa-sync"></i> '.$this->lang->line("Force Resume").'</a></div> </div>';
+    }
+
+    if($error_message!="")
+        $response .= "<div class='alert alert-danger text-center'> {$this->lang->line("Something went wrong for one or more message. Original error message :")} {$error_message} <br><a class='pointer' style='text-decoration:underline;' href='' data-toggle='modal' data-target='#error_message_learn'>".$this->lang->line("Learn more about common error messages")."</a></div>";
+
+    $response .='
+    <div class="row">
+    <div class="col-12 col-sm-6 col-md-6 col-lg-3">
+        <div class="card card-statistic-1">
+          <div class="card-icon bg-primary">
+            <i class="fas fa-info-circle"></i>
+          </div>
+          <div class="card-wrap">
+            <div class="card-header">
+              <h4>'. $this->lang->line("Campaign").$posting_status.'</h4>
+            </div>
+            <div class="card-body">
+              '.$campaign_name.'
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-sm-6 col-md-6 col-lg-3">
+        <div class="card card-statistic-1">
+          <div class="card-icon bg-primary">
+            <i class="far fa-newspaper"></i>
+          </div>
+          <div class="card-wrap">
+            <div class="card-header">
+              <h4>'.$this->lang->line("Page Name").'</h4>
+            </div>
+            <div class="card-body">
+              <a target="_BLANK" href="https://facebook.com/'.$campaign_data[0]["fb_page_id"].'">'.$campaign_data[0]["page_name"].'</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-sm-6 col-md-6 col-lg-3">
+        <div class="card card-statistic-1">
+          <div class="card-icon bg-primary">
+            <i class="far fa-paper-plane"></i>
+          </div>
+          <div class="card-wrap">
+            <div class="card-header">
+              <h4>'.$this->lang->line("Sent").' ('.$sent_rate.'%)</h4>
+            </div>
+            <div class="card-body">
+              '.$successfully_sent.'/'.$total_thread.'</a>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col-12 col-sm-6 col-md-6 col-lg-3">
+        <div class="card card-statistic-1">
+          <div class="card-icon bg-primary">
+            <i class="fas fa-check-circle"></i>
+          </div>
+          <div class="card-wrap">
+            <div class="card-header">
+              <h4>'.$this->lang->line("Delivered").' ('.$delivery_rate.'%)</h4>
+            </div>
+            <div class="card-body">
+              '.$successfully_delivered.'/'.$total_thread.'
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <style>
+    .card-statistic-1{border:.5px solid #dee2e6;border-radius: 4px;}
+    .card-statistic-1 .card-icon i{font-size:40px !important;margin-top:20px;}
+    </style>';       
+
+    echo json_encode(array("response1"=>$response,"response3"=>$drop_menu));
+}
     public function campaign_sent_status_data()
     { 
         $this->ajax_check();
@@ -1058,59 +1630,60 @@ In this case, we suggest you to check the error message in report, and if you th
     }
 
     public function create_subscriber_broadcast_campaign_pro()
-    {
-        if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access))
+{
+    if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access))
         redirect('home/login_page', 'location');
 
-        $data["templates"]=$this->basic->get_enum_values("messenger_bot_broadcast_serial","template_type");
+    $data["templates"] = $this->basic->get_enum_values("messenger_bot_broadcast_serial","template_type");
+    $data['body'] = 'messenger_broadcaster/subscriber_bulk_broadcast_add_pro';
+    $data['page_title'] = $this->lang->line('Add Subscriber Broadcast');  
 
-        $data['body'] = 'messenger_broadcaster/subscriber_bulk_broadcast_add_pro';
-        $data['page_title'] = $this->lang->line('Add Subscriber Broadcast');  
+    // جلب جميع حسابات الفيسبوك المرتبطة بالمستخدم الحالي
+    $profiles = $this->basic->get_data('facebook_rx_fb_user_info', ['where'=>["user_id"=>$this->user_id]], ['id', 'name', 'email']);
+    $data['profiles'] = $profiles;
 
-        // $data['page_info'] = $this->basic->get_data("facebook_rx_fb_page_info",array("where"=>array("user_id"=>$this->user_id,"facebook_rx_fb_user_info_id"=>$this->session->userdata("facebook_rx_fb_user_info"),"bot_enabled"=>"1")),$select='',$join='',$limit='',$start=NULL,$order_by='page_name ASC');
+    // جلب الصفحات المرتبطة بالحساب الحالي للسلوك القديم (يمكنك تعديلها لاحقاً لتتعامل مع الحسابات المختارة من الـ dropdown)
+    $join = array('facebook_rx_fb_user_info'=>'facebook_rx_fb_page_info.facebook_rx_fb_user_info_id=facebook_rx_fb_user_info.id,left');
+    $page_info = $this->basic->get_data('facebook_rx_fb_page_info',array('where'=>array("facebook_rx_fb_page_info.facebook_rx_fb_user_info_id"=>$this->session->userdata("facebook_rx_fb_user_info"),'facebook_rx_fb_page_info.user_id'=>$this->user_id,'bot_enabled'=>'1')),array('facebook_rx_fb_page_info.id','page_name','name'),$join);
 
-        $join = array('facebook_rx_fb_user_info'=>'facebook_rx_fb_page_info.facebook_rx_fb_user_info_id=facebook_rx_fb_user_info.id,left');
-        $page_info = $this->basic->get_data('facebook_rx_fb_page_info',array('where'=>array("facebook_rx_fb_page_info.facebook_rx_fb_user_info_id"=>$this->session->userdata("facebook_rx_fb_user_info"),'facebook_rx_fb_page_info.user_id'=>$this->user_id,'bot_enabled'=>'1')),array('facebook_rx_fb_page_info.id','page_name','name'),$join);
+    $ig_page_info = $this->basic->get_data('facebook_rx_fb_page_info',array('where'=>array("facebook_rx_fb_page_info.facebook_rx_fb_user_info_id"=>$this->session->userdata("facebook_rx_fb_user_info"),'facebook_rx_fb_page_info.user_id'=>$this->user_id,'bot_enabled'=>'1','has_instagram'=>'1')),array('facebook_rx_fb_page_info.id','page_name','name','insta_username'),$join);
 
-        $ig_page_info = $this->basic->get_data('facebook_rx_fb_page_info',array('where'=>array("facebook_rx_fb_page_info.facebook_rx_fb_user_info_id"=>$this->session->userdata("facebook_rx_fb_user_info"),'facebook_rx_fb_page_info.user_id'=>$this->user_id,'bot_enabled'=>'1','has_instagram'=>'1')),array('facebook_rx_fb_page_info.id','page_name','name','insta_username'),$join);
-
-        $group_page_list = array();
-
-        $flow_page_list = array();
-        if(isset($page_info) && count($page_info) > 0) {
-            $flow_page_list['media_name'] = $this->lang->line("Facebook");
-            foreach($page_info as $value)
-            {
-                $flow_page_list['page_list'][$value['id']."-fb"] = $value['page_name']." [".$value['name']."]";
-            }
-            array_push($group_page_list,$flow_page_list);
+    $group_page_list = array();
+    $flow_page_list = array();
+    if(isset($page_info) && count($page_info) > 0) {
+        $flow_page_list['media_name'] = $this->lang->line("Facebook");
+        foreach($page_info as $value)
+        {
+            $flow_page_list['page_list'][$value['id']."-fb"] = $value['page_name']." [".$value['name']."]";
         }
-
-        $ig_flow_page_list = array();
-        if(isset($ig_page_info) && count($ig_page_info) > 0) {
-            $ig_flow_page_list['media_name'] = $this->lang->line("Instagram");
-            foreach($ig_page_info as $ig_value)
-            {
-                $ig_flow_page_list['page_list'][$ig_value['id']."-ig"] = $ig_value['page_name']." [".$ig_value['insta_username']."]";
-            }
-            array_push($group_page_list,$ig_flow_page_list);
-        }
-
-        $data['group_page_list'] = $group_page_list;
-
-        $postback_id_list = $this->basic->get_data('messenger_bot_postback',array('where'=>array('user_id'=>$this->user_id)));  
-        $data['postback_ids'] = $postback_id_list;
-
-        $data['tag_list'] = $this->get_broadcast_tags();
-        $data["broadcast_types"]=$this->basic->get_enum_values_assoc("messenger_bot_broadcast_serial","broadcast_type");
-        unset($data['broadcast_types']['OTN']);
-
-        $data['locale_list'] = $this->sdk_locale();
-        $data["time_zone_numeric"]= $this->_time_zone_list_numeric();
-
-        $data["time_zone"]= $this->_time_zone_list();
-        $this->_viewcontroller($data); 
+        array_push($group_page_list,$flow_page_list);
     }
+
+    $ig_flow_page_list = array();
+    if(isset($ig_page_info) && count($ig_page_info) > 0) {
+        $ig_flow_page_list['media_name'] = $this->lang->line("Instagram");
+        foreach($ig_page_info as $ig_value)
+        {
+            $ig_flow_page_list['page_list'][$ig_value['id']."-ig"] = $ig_value['page_name']." [".$ig_value['insta_username']."]";
+        }
+        array_push($group_page_list,$ig_flow_page_list);
+    }
+
+    $data['group_page_list'] = $group_page_list;
+
+    $postback_id_list = $this->basic->get_data('messenger_bot_postback',array('where'=>array('user_id'=>$this->user_id)));  
+    $data['postback_ids'] = $postback_id_list;
+
+    $data['tag_list'] = $this->get_broadcast_tags();
+    $data["broadcast_types"] = $this->basic->get_enum_values_assoc("messenger_bot_broadcast_serial","broadcast_type");
+    unset($data['broadcast_types']['OTN']);
+
+    $data['locale_list'] = $this->sdk_locale();
+    $data["time_zone_numeric"]= $this->_time_zone_list_numeric();
+    $data["time_zone"]= $this->_time_zone_list();
+
+    $this->_viewcontroller($data); 
+}
 
     public function subscriber_bulk_broadcast_add_action()
     {
@@ -2029,928 +2602,312 @@ In this case, we suggest you to check the error message in report, and if you th
     }
     
     public function subscriber_bulk_broadcast_add_action_pro()
+{
+    if(function_exists('ini_set')) ini_set('memory_limit', '-1');
+
+    $this->ajax_check();
+    $this->csrf_token_check();
+
+    if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access)) exit();
+
+    // sanitize POST
+    $post=$_POST;
+    foreach ($post as $key => $value) {
+        if(!is_array($value)) $temp = strip_tags($value);
+        else $temp = $value;
+        $$key=$temp;
+    }
+
+    // لو الواجهة الجديدة ما بترسلش النوع، خليه Non Promo افتراضياً لتفادي تصفير 24 ساعة
+    if(!isset($broadcast_type) || $broadcast_type==='') $broadcast_type = 'Non Promo';
+    if($broadcast_type!=="Non Promo") $message_tag = "";
+
+    $posting_status = "0";
+
+    // الصفحات المختارة (DB ids مفصولة بفواصل)
+    $page_ids_raw = $this->input->post("selected_page_ids");
+    $pageid = array_filter(array_map('trim', explode(",",$page_ids_raw)));
+
+    // دعم القالب المحفوظ (اختياري)
+    $use_saved_template = false;
+    $saved_template_payload = array();
+    if (isset($template_id) && !empty($template_id)) {
+        $tpl = $this->db->get_where('pro_templates', array('id' => (int)$template_id, 'user_id' => $this->user_id))->row_array();
+        if ($tpl && !empty($tpl['payload'])) {
+            $decoded = json_decode($tpl['payload'], true);
+            if (is_array($decoded)) $saved_template_payload = $decoded;
+            $use_saved_template = true;
+        }
+    }
+
+    $created_any = false;
+
+    foreach($pageid as $page_id)
     {
-      
-      if(function_exists('ini_set')){
-          ini_set('memory_limit', '-1');
-       } 
-
-        $this->ajax_check();
-        $this->csrf_token_check();
-
-        if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access)) exit();
-
-        $post=$_POST;
-        foreach ($post as $key => $value) 
-        {            
-            if(!is_array($value)) $temp = strip_tags($value);
-            else $temp = $value;
-            $$key=$temp;
-            
-        }
-
-        if($broadcast_type!="Non Promo") $message_tag = "";
-
-        $posting_status = "0";
-        $successfully_sent = 0;
-        $successfully_delivered = 0;
-        $successfully_opened = 0;
-        $successfully_clicked = 0;
-        $insert_data = array();
-        $page_id=$this->input->post("selected_page_ids");// database id
-        $pageid=explode(",",$page_id);
-        $media_type = "fb";
-
-        if(isset($pageid[1]) && $pageid[1]=="ig") {
-            $media_type = "ig";
-        }
-
-        foreach($pageid as $page_id){
         $total_thread = 0;
-        $page_table_id=$page_id;
-        $insert_data['campaign_name'] = $campaign_name;
-        $insert_data['page_id'] = $page_table_id;
-        $insert_data['broadcast_type'] = $broadcast_type;
-        $insert_data['message_tag'] = $message_tag;
-        $insert_data['user_gender'] = $user_gender;
-        $insert_data['user_time_zone'] = $user_time_zone;
-        $insert_data['user_locale'] = $user_locale;
-        $insert_data['social_media'] = $media_type;
+        $page_table_id = (int)$page_id;
 
-        // domain white list section
-        $messenger_bot_user_info_id = $this->basic->get_data("facebook_rx_fb_page_info",array("where"=>array("id"=>$page_table_id)));
-        $page_access_token = $messenger_bot_user_info_id[0]['page_access_token'];
-        $page_name = $messenger_bot_user_info_id[0]['page_name'];
-        $fb_page_id=$messenger_bot_user_info_id[0]['page_id'];
-        $insert_data['fb_page_id'] =  $fb_page_id;
-        $messenger_bot_user_info_id = $messenger_bot_user_info_id[0]["facebook_rx_fb_user_info_id"];
-        $white_listed_domain = $this->basic->get_data("messenger_bot_domain_whitelist",array("where"=>array("user_id"=>$this->user_id,"messenger_bot_user_info_id"=>$messenger_bot_user_info_id,"page_id"=>$page_table_id)),"domain");
+        // معلومات الصفحة
+        $page_row = $this->basic->get_data("facebook_rx_fb_page_info", array("where" => array("id" => $page_table_id)));
+        if (!isset($page_row[0])) continue;
+        $page_access_token = $page_row[0]['page_access_token'];
+        $page_name = $page_row[0]['page_name'];
+        $fb_page_id = $page_row[0]['page_id'];
+        $messenger_bot_user_info_id_val = $page_row[0]["facebook_rx_fb_user_info_id"];
 
-        $white_listed_domain_array = array();
-        foreach ($white_listed_domain as $value) {
-            $white_listed_domain_array[] = $value['domain'];
+        // حدد media_type ديناميكيًا من المشتركين (fb/ig) بدل الافتراض
+        $media_type = 'fb';
+        $mt = $this->basic->get_data('messenger_bot_subscriber', ['where'=>['page_table_id'=>$page_table_id]], 'social_media', '', 1);
+        if (isset($mt[0]['social_media']) && in_array($mt[0]['social_media'], ['fb','ig'])) {
+            $media_type = $mt[0]['social_media'];
         }
-        $need_to_whitelist_array = array();
 
-        $postback_insert_data = array();
-        $reply_bot = array();
+        // whitelist الحالية
+        $white_listed_domain_rows = $this->basic->get_data(
+            "messenger_bot_domain_whitelist",
+            array("where" => array(
+                "user_id" => $this->user_id,
+                "messenger_bot_user_info_id" => $messenger_bot_user_info_id_val,
+                "page_id" => $page_table_id
+            )),
+            "domain"
+        );
+        $white_listed_domain_array = array();
+        if(is_array($white_listed_domain_rows)) {
+            foreach ($white_listed_domain_rows as $v) if(isset($v['domain'])) $white_listed_domain_array[] = $v['domain'];
+        }
+
+        $need_to_whitelist_array = array();
         $bot_message = array();
 
-
-        for ($k=1; $k <=1 ; $k++) 
-        {    
-            $template_type = 'template_type_'.$k;
-            $template_type = $$template_type;
-            $insert_data['template_type'] = $template_type;
-            $template_type = str_replace(' ', '_', $template_type);
-
-            if($template_type == 'text')
-            {
-                $text_reply = 'text_reply_'.$k;
-                $text_reply = isset($$text_reply) ? $$text_reply : '';
-                if($text_reply != '')
-                {
-                    $reply_bot[$k]['text'] = $text_reply;                    
+        // بناء الرسالة
+        if ($use_saved_template && method_exists($this,'normalize_saved_template_message')) {
+            $bot_message['message'] = $this->normalize_saved_template_message(
+                $saved_template_payload,
+                $need_to_whitelist_array,
+                $white_listed_domain_array
+            );
+            if (!empty($saved_template_payload['quick_replies']) && is_array($saved_template_payload['quick_replies']) && empty($bot_message['message']['quick_replies'])) {
+                $bot_message['message']['quick_replies'] = $saved_template_payload['quick_replies'];
+                foreach ($bot_message['message']['quick_replies'] as &$qr) {
+                    if (empty($qr['content_type'])) $qr['content_type'] = 'text';
+                    if ($qr['content_type']==='text' && empty($qr['title']) && !empty($qr['payload'])) $qr['title'] = $qr['payload'];
                 }
             }
-            if($template_type == 'image')
-            {
-                $image_reply_field = 'image_reply_field_'.$k;
-                $image_reply_field = isset($$image_reply_field) ? $$image_reply_field : '';
-                if($image_reply_field != '')
-                {
-                    $reply_bot[$k]['attachment']['type'] = 'image';
-                    $reply_bot[$k]['attachment']['payload']['url'] = $image_reply_field;
-                    $reply_bot[$k]['attachment']['payload']['is_reusable'] = true;                    
-                }
-            }
-            if($template_type == 'audio')
-            {
-                $audio_reply_field = 'audio_reply_field_'.$k;
-                $audio_reply_field = isset($$audio_reply_field) ? $$audio_reply_field : '';
-                if($audio_reply_field != '')
-                {
-                    $reply_bot[$k]['attachment']['type'] = 'audio';
-                    $reply_bot[$k]['attachment']['payload']['url'] = $audio_reply_field;
-                    $reply_bot[$k]['attachment']['payload']['is_reusable'] = true;
-                }
-                
-            }
-            if($template_type == 'video')
-            {
-                $video_reply_field = 'video_reply_field_'.$k;
-                $video_reply_field = isset($$video_reply_field) ? $$video_reply_field : '';
-                if($video_reply_field != '')
-                {
-                    $reply_bot[$k]['attachment']['type'] = 'video';
-                    $reply_bot[$k]['attachment']['payload']['url'] = $video_reply_field;
-                    $reply_bot[$k]['attachment']['payload']['is_reusable'] = true;                    
-                }
-            }
-            if($template_type == 'file')
-            {
-                $file_reply_field = 'file_reply_field_'.$k;
-                $file_reply_field = isset($$file_reply_field) ? $$file_reply_field : '';
-                if($file_reply_field != '')
-                {                    
-                    $reply_bot[$k]['attachment']['type'] = 'file';
-                    $reply_bot[$k]['attachment']['payload']['url'] = $file_reply_field;
-                    $reply_bot[$k]['attachment']['payload']['is_reusable'] = true;
-                }
-            }
-
-
-
-        
-            if($template_type == 'media')
-            {
-                $media_input = 'media_input_'.$k;
-                $media_input = isset($$media_input) ? $$media_input : '';
-                if($media_input != '')
-                {
-                    $reply_bot[$k]['attachment']['type'] = 'template';
-                    $reply_bot[$k]['attachment']['payload']['template_type'] = 'media';
-                    $template_media_type = '';
-                    if (strpos($media_input, '/videos/') !== false) {
-                        $template_media_type = 'video';
-                    }
-                    else
-                        $template_media_type = 'image';
-                    $reply_bot[$k]['attachment']['payload']['elements'][0]['media_type'] = $template_media_type;
-                    $reply_bot[$k]['attachment']['payload']['elements'][0]['url'] = $media_input;                    
-                }
-
-                for ($i=1; $i <= 3 ; $i++) 
-                { 
-                    $button_text = 'media_text_'.$i.'_'.$k;
-                    $button_text = isset($$button_text) ? $$button_text : '';
-                    $button_type = 'media_type_'.$i.'_'.$k;
-                    $button_type = isset($$button_type) ? $$button_type : '';
-                    $button_postback_id = 'media_post_id_'.$i.'_'.$k;
-                    $button_postback_id = isset($$button_postback_id) ? $$button_postback_id : '';
-                    $button_web_url = 'media_web_url_'.$i.'_'.$k;
-                    $button_web_url = isset($$button_web_url) ? $$button_web_url : '';
-
-                     //add an extra query parameter for tracking the subscriber to whom send 
-                    if($button_web_url!='')
-                        $button_web_url=add_query_string_to_url($button_web_url,"subscriber_id","#SUBSCRIBER_ID_REPLACE#");
-
-                    $button_call_us = 'media_call_us_'.$i.'_'.$k;
-                    $button_call_us = isset($$button_call_us) ? $$button_call_us : '';
-
-                    if($button_type == 'post_back')
-                    {
-                        if($button_text != '' && $button_type != '' && $button_postback_id != '')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['type'] = 'postback';
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['payload'] = $button_postback_id;
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['title'] = $button_text;
-                        }
-                    }
-                    if(strpos($button_type,'web_url') !== FALSE)
-                    {
-                        $button_type_array = explode('_', $button_type);
-                        if(isset($button_type_array[2]))
-                        {
-                            $button_extension = trim($button_type_array[2],'_'); 
-                            array_pop($button_type_array);
-                        }            
-                        else $button_extension = '';
-                        $button_type = implode('_', $button_type_array);
-
-                        if($button_text != '' && $button_type != '' && ($button_web_url != '' || $button_extension != ''))
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['type'] = 'web_url';
-                            if($button_extension != '' && $button_extension == 'birthday'){
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['webview_height_ratio'] = 'compact';
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['url'] = base_url('webview_builder/get_birthdate?subscriber_id=#SUBSCRIBER_ID_REPLACE#');
-                            }
-                            else
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['url'] = $button_web_url;
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['title'] = $button_text;
-
-                            if($button_extension != '' && $button_extension != 'birthday')
-                            {
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['webview_height_ratio'] = $button_extension;
-                                // $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['fallback_url'] = $button_web_url;
-                            }
-
-                            if(!in_array($button_web_url, $white_listed_domain_array))
-                            {
-                                $need_to_whitelist_array[] = $button_web_url;
-                            }
-                        }
-                    }
-                    if($button_type == 'phone_number')
-                    {
-                        if($button_text != '' && $button_type != '' && $button_call_us != '')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['type'] = 'phone_number';
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['payload'] = $button_call_us;
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['title'] = $button_text;
-                        }
-                    }
-                }
-            }
-
-
-
-            if($template_type == 'text_with_buttons')
-            {
-                $text_with_buttons_input = 'text_with_buttons_input_'.$k;
-                $text_with_buttons_input = isset($$text_with_buttons_input) ? $$text_with_buttons_input : '';
-                if($text_with_buttons_input != '')
-                {
-                    $reply_bot[$k]['attachment']['type'] = 'template';
-                    $reply_bot[$k]['attachment']['payload']['template_type'] = 'button';
-                    $reply_bot[$k]['attachment']['payload']['text'] = $text_with_buttons_input;                    
-                }
-
-                for ($i=1; $i <= 3 ; $i++) 
-                { 
-                    $button_text = 'text_with_buttons_text_'.$i.'_'.$k;
-                    $button_text = isset($$button_text) ? $$button_text : '';
-                    $button_type = 'text_with_button_type_'.$i.'_'.$k;
-                    $button_type = isset($$button_type) ? $$button_type : '';
-                    $button_postback_id = 'text_with_button_post_id_'.$i.'_'.$k;
-                    $button_postback_id = isset($$button_postback_id) ? $$button_postback_id : '';
-                    $button_web_url = 'text_with_button_web_url_'.$i.'_'.$k;
-                    $button_web_url = isset($$button_web_url) ? $$button_web_url : '';
-
-                    //add an extra query parameter for tracking the subscriber to whom send 
-                    if($button_web_url!='')
-                        $button_web_url=add_query_string_to_url($button_web_url,"subscriber_id","#SUBSCRIBER_ID_REPLACE#");
-
-                    $button_call_us = 'text_with_button_call_us_'.$i.'_'.$k;
-                    $button_call_us = isset($$button_call_us) ? $$button_call_us : '';
-
-                    if($button_type == 'post_back')
-                    {
-                        if($button_text != '' && $button_type != '' && $button_postback_id != '')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['type'] = 'postback';
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['payload'] = $button_postback_id;
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['title'] = $button_text;
-                        }
-                    }
-                    if(strpos($button_type,'web_url') !== FALSE)
-                    {
-                        $button_type_array = explode('_', $button_type);
-                        if(isset($button_type_array[2]))
-                        {
-                            $button_extension = trim($button_type_array[2],'_'); 
-                            array_pop($button_type_array);
-                        }            
-                        else $button_extension = '';
-                        $button_type = implode('_', $button_type_array);
-
-                        if($button_text != '' && $button_type != '' && ($button_web_url != '' || $button_extension != ''))
-                        {
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['type'] = 'web_url';
-
-                            if($button_extension != '' && $button_extension == 'birthday'){
-                                $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['webview_height_ratio'] = 'compact';
-                                $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['url'] = base_url('webview_builder/get_birthdate?subscriber_id=#SUBSCRIBER_ID_REPLACE#');
-                            }
-                            else
-                                $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['url'] = $button_web_url;
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['title'] = $button_text;
-
-                            if($button_extension != '' && $button_extension != 'birthday')
-                            {
-                                $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['webview_height_ratio'] = $button_extension;
-                                // $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['fallback_url'] = $button_web_url;
-                            }
-
-                            if(!in_array($button_web_url, $white_listed_domain_array))
-                            {
-                                $need_to_whitelist_array[] = $button_web_url;
-                            }
-                        }
-                    }
-                    if($button_type == 'phone_number')
-                    {
-                        if($button_text != '' && $button_type != '' && $button_call_us != '')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['type'] = 'phone_number';
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['payload'] = $button_call_us;
-                            $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['title'] = $button_text;
-                        }
-                    }
-                }
-            }
-
-            if($template_type == 'quick_reply')
-            {
-                $quick_reply_text = 'quick_reply_text_'.$k;
-                $quick_reply_text = isset($$quick_reply_text) ? $$quick_reply_text : '';
-                if($quick_reply_text != '')
-                {
-                    $reply_bot[$k]['text'] = $quick_reply_text;                    
-                }
-
-                for ($i=1; $i <= 11 ; $i++) 
-                { 
-                    $button_text = 'quick_reply_button_text_'.$i.'_'.$k;
-                    $button_text = isset($$button_text) ? $$button_text : '';
-                    $button_postback_id = 'quick_reply_post_id_'.$i.'_'.$k;
-                    $button_postback_id = isset($$button_postback_id) ? $$button_postback_id : '';
-                    $button_type = 'quick_reply_button_type_'.$i.'_'.$k;
-                    $button_type = isset($$button_type) ? $$button_type : '';
-                    if($button_type=='post_back')
-                    {
-                        if($button_text != '' && $button_postback_id != '')
-                        {
-                            $reply_bot[$k]['quick_replies'][$i-1]['content_type'] = 'text';
-                            $reply_bot[$k]['quick_replies'][$i-1]['payload'] = $button_postback_id;
-                            $reply_bot[$k]['quick_replies'][$i-1]['title'] = $button_text;
-                        }                    
-                    }
-                    if($button_type=='phone_number')
-                    {
-                        $reply_bot[$k]['quick_replies'][$i-1]['content_type'] = 'user_phone_number';
-                    }
-                    if($button_type=='user_email')
-                    {
-                        $reply_bot[$k]['quick_replies'][$i-1]['content_type'] = 'user_email';
-                    }
-                    if($button_type=='location')
-                    {
-                        $reply_bot[$k]['quick_replies'][$i-1]['content_type'] = 'location';
-                    }
-
-                }
-            }
-
-            if($template_type == 'generic_template')
-            {
-                $generic_template_title = 'generic_template_title_'.$k;
-                $generic_template_title = isset($$generic_template_title) ? $$generic_template_title : '';
-                $generic_template_image = 'generic_template_image_'.$k;
-                $generic_template_image = isset($$generic_template_image) ? $$generic_template_image : '';
-                $generic_template_subtitle = 'generic_template_subtitle_'.$k;
-                $generic_template_subtitle = isset($$generic_template_subtitle) ? $$generic_template_subtitle : '';
-                $generic_template_image_destination_link = 'generic_template_image_destination_link_'.$k;
-                $generic_template_image_destination_link = isset($$generic_template_image_destination_link) ? $$generic_template_image_destination_link : '';
-
-                if($generic_template_title != '')
-                {
-                    $reply_bot[$k]['attachment']['type'] = 'template';
-                    $reply_bot[$k]['attachment']['payload']['template_type'] = 'generic';
-                    $reply_bot[$k]['attachment']['payload']['elements'][0]['title'] = $generic_template_title;
-                    $reply_bot[$k]['attachment']['payload']['elements'][0]['subtitle'] = $generic_template_subtitle;                    
-                }
-
-                if($generic_template_subtitle != '')
-                $reply_bot[$k]['attachment']['payload']['elements'][0]['subtitle'] = $generic_template_subtitle;
-
-                if($generic_template_image!="")
-                {
-                    $reply_bot[$k]['attachment']['payload']['elements'][0]['image_url'] = $generic_template_image;
-                    if($generic_template_image_destination_link!="")
-                    {
-                        $reply_bot[$k]['attachment']['payload']['elements'][0]['default_action']['type'] = 'web_url';
-                        $reply_bot[$k]['attachment']['payload']['elements'][0]['default_action']['url'] = $generic_template_image_destination_link;
-                    }
-
-                    if(function_exists('getimagesize') && $generic_template_image!='') 
-                    {
-                        list($width, $height, $type, $attr) = getimagesize($generic_template_image);
-                        if($width==$height)
-                            $reply_bot[$k]['attachment']['payload']['image_aspect_ratio'] = 'square';
-                    }
-
-                }
-                
-
-                for ($i=1; $i <= 3 ; $i++) 
-                { 
-                    $button_text = 'generic_template_button_text_'.$i.'_'.$k;
-                    $button_text = isset($$button_text) ? $$button_text : '';
-                    $button_type = 'generic_template_button_type_'.$i.'_'.$k;
-                    $button_type = isset($$button_type) ? $$button_type : '';
-                    $button_postback_id = 'generic_template_button_post_id_'.$i.'_'.$k;
-                    $button_postback_id = isset($$button_postback_id) ? $$button_postback_id : '';
-                    $button_web_url = 'generic_template_button_web_url_'.$i.'_'.$k;
-                    $button_web_url = isset($$button_web_url) ? $$button_web_url : '';
-
-                    //add an extra query parameter for tracking the subscriber to whom send 
-                    if($button_web_url!='')
-                        $button_web_url=add_query_string_to_url($button_web_url,"subscriber_id","#SUBSCRIBER_ID_REPLACE#");
-
-                    $button_call_us = 'generic_template_button_call_us_'.$i.'_'.$k;
-                    $button_call_us = isset($$button_call_us) ? $$button_call_us : '';
-
-                    if($button_type == 'post_back')
-                    {
-                        if($button_text != '' && $button_type != '' && $button_postback_id != '')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['type'] = 'postback';
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['payload'] = $button_postback_id;
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['title'] = $button_text;
-                        }
-                    }
-                    if(strpos($button_type,'web_url') !== FALSE)
-                    {
-                        $button_type_array = explode('_', $button_type);
-                        if(isset($button_type_array[2]))
-                        {
-                            $button_extension = trim($button_type_array[2],'_'); 
-                            array_pop($button_type_array);
-                        }            
-                        else $button_extension = '';
-                        $button_type = implode('_', $button_type_array);
-
-                        if($button_text != '' && $button_type != '' && ($button_web_url != '' || $button_extension != ''))
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['type'] = 'web_url';
-                            if($button_extension != '' && $button_extension == 'birthday'){                                
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['webview_height_ratio'] = 'compact';
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['url'] = base_url('webview_builder/get_birthdate?subscriber_id=#SUBSCRIBER_ID_REPLACE#');
-                            }
-                            else
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['url'] = $button_web_url;
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['title'] = $button_text;
-
-                            if($button_extension != '' && $button_extension != 'birthday')
-                            {
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['webview_height_ratio'] = $button_extension;
-                                // $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['fallback_url'] = $button_web_url;
-                            }
-
-                            if(!in_array($button_web_url, $white_listed_domain_array))
-                            {
-                                $need_to_whitelist_array[] = $button_web_url;
-                            }
-                        }
-                    }
-                    if($button_type == 'phone_number')
-                    {
-                        if($button_text != '' && $button_type != '' && $button_call_us != '')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['type'] = 'phone_number';
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['payload'] = $button_call_us;
-                            $reply_bot[$k]['attachment']['payload']['elements'][0]['buttons'][$i-1]['title'] = $button_text;
-                        }
-                    }
-                }
-            }
-
-            if($template_type == 'carousel')
-            {
-                $reply_bot[$k]['attachment']['type'] = 'template';
-                $reply_bot[$k]['attachment']['payload']['template_type'] = 'generic';
-                for ($j=1; $j <=10 ; $j++) 
-                {                                 
-                    $carousel_image = 'carousel_image_'.$j.'_'.$k;
-                    $carousel_title = 'carousel_title_'.$j.'_'.$k;
-
-                    if(!isset($$carousel_title) || $$carousel_title == '') continue;
-
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['title'] = $$carousel_title;
-                    $carousel_subtitle = 'carousel_subtitle_'.$j.'_'.$k;
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['subtitle'] = $$carousel_subtitle;
-
-                    if(isset($$carousel_image) && $$carousel_image!="")
-                    {
-                        $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['image_url'] = $$carousel_image;                    
-                        $carousel_image_destination_link = 'carousel_image_destination_link_'.$j.'_'.$k;
-                        if($$carousel_image_destination_link!="") 
-                        {
-                            $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['default_action']['type'] = 'web_url';
-                            $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['default_action']['url'] = $$carousel_image_destination_link;
-                        }
-
-                        if(function_exists('getimagesize') && $$carousel_image!='') 
-                        {
-                            list($width, $height, $type, $attr) = getimagesize($$carousel_image);
-                            if($width==$height)
-                                $reply_bot[$k]['attachment']['payload']['image_aspect_ratio'] = 'square';
-                        }
-
-                    }
-
-                    for ($i=1; $i <= 3 ; $i++) 
-                    { 
-                        $button_text = 'carousel_button_text_'.$j."_".$i.'_'.$k;
-                        $button_text = isset($$button_text) ? $$button_text : '';
-                        $button_type = 'carousel_button_type_'.$j."_".$i.'_'.$k;
-                        $button_type = isset($$button_type) ? $$button_type : '';
-                        $button_postback_id = 'carousel_button_post_id_'.$j."_".$i.'_'.$k;
-                        $button_postback_id = isset($$button_postback_id) ? $$button_postback_id : '';
-                        $button_web_url = 'carousel_button_web_url_'.$j."_".$i.'_'.$k;
-                        $button_web_url = isset($$button_web_url) ? $$button_web_url : '';
-
-                        //add an extra query parameter for tracking the subscriber to whom send 
-                        if($button_web_url!='')
-                          $button_web_url=add_query_string_to_url($button_web_url,"subscriber_id","#SUBSCRIBER_ID_REPLACE#");
-
-                        $button_call_us = 'carousel_button_call_us_'.$j."_".$i.'_'.$k;
-                        $button_call_us = isset($$button_call_us) ? $$button_call_us : '';
-
-                        if($button_type == 'post_back')
-                        {
-                            if($button_text != '' && $button_type != '' && $button_postback_id != '')
-                            {
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['type'] = 'postback';
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['payload'] = $button_postback_id;
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['title'] = $button_text;
-                            }
-                        }
-                        if(strpos($button_type,'web_url') !== FALSE)
-                        {
-                            $button_type_array = explode('_', $button_type);
-                            if(isset($button_type_array[2]))
-                            {
-                                $button_extension = trim($button_type_array[2],'_'); 
-                                array_pop($button_type_array);
-                            }            
-                            else $button_extension = '';
-                            $button_type = implode('_', $button_type_array);
-
-                            if($button_text != '' && $button_type != '' && ($button_web_url != '' || $button_extension != ''))
-                            {
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['type'] = 'web_url';
-                                if($button_extension != '' && $button_extension == 'birthday'){
-                                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['webview_height_ratio'] = 'compact';
-                                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['url'] = base_url('webview_builder/get_birthdate?subscriber_id=#SUBSCRIBER_ID_REPLACE#');
-                                }
-                                else
-                                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['url'] = $button_web_url;
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['title'] = $button_text;
-
-                                if($button_extension != '' && $button_extension != 'birthday')
-                                {
-                                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['messenger_extensions'] = 'true';
-                                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['webview_height_ratio'] = $button_extension;
-                                    // $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['fallback_url'] = $button_web_url;
-                                }
-
-                                if(!in_array($button_web_url, $white_listed_domain_array))
-                                {
-                                    $need_to_whitelist_array[] = $button_web_url;
-                                }
-                            }
-                        }
-                        if($button_type == 'phone_number')
-                        {
-                            if($button_text != '' && $button_type != '' && $button_call_us != '')
-                            {
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['type'] = 'phone_number';
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['payload'] = $button_call_us;
-                                $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['buttons'][$i-1]['title'] = $button_text;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if($template_type == 'list')
-            {
-                $reply_bot[$k]['attachment']['type'] = 'template';
-                $reply_bot[$k]['attachment']['payload']['template_type'] = 'list';
-
-                for ($j=1; $j <=4 ; $j++) 
-                {                                 
-                    $list_image = 'list_image_'.$j.'_'.$k;
-                    if(!isset($$list_image) || $$list_image == '') continue;
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['image_url'] = $$list_image;
-                    $list_title = 'list_title_'.$j.'_'.$k;
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['title'] = $$list_title;
-                    $list_subtitle = 'list_subtitle_'.$j.'_'.$k;
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['subtitle'] = $$list_subtitle;
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['default_action']['type'] = 'web_url';
-                    $list_image_destination_link = 'list_image_destination_link_'.$j.'_'.$k;
-                    $reply_bot[$k]['attachment']['payload']['elements'][$j-1]['default_action']['url'] = $$list_image_destination_link;
-                    
-                }
-
-                $button_text = 'list_with_buttons_text_'.$k;
-                $button_text = isset($$button_text) ? $$button_text : '';
-                $button_type = 'list_with_button_type_'.$k;
-                $button_type = isset($$button_type) ? $$button_type : '';
-                $button_postback_id = 'list_with_button_post_id_'.$k;
-                $button_postback_id = isset($$button_postback_id) ? $$button_postback_id : '';
-                $button_web_url = 'list_with_button_web_url_'.$k;
-                $button_web_url = isset($$button_web_url) ? $$button_web_url : '';
-
-                //add an extra query parameter for tracking the subscriber to whom send 
-                if($button_web_url!='')
-                  $button_web_url=add_query_string_to_url($button_web_url,"subscriber_id","#SUBSCRIBER_ID_REPLACE#");
-
-                $button_call_us = 'list_with_button_call_us_'.$k;
-                $button_call_us = isset($$button_call_us) ? $$button_call_us : '';
-                
-                if($button_type == 'post_back')
-                {
-                    if($button_text != '' && $button_type != '' && $button_postback_id != '')
-                    {
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['type'] = 'postback';
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['payload'] = $button_postback_id;
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['title'] = $button_text;
-                    }
-                }
-                if(strpos($button_type,'web_url') !== FALSE)
-                {
-                    $button_type_array = explode('_', $button_type);
-                    if(isset($button_type_array[2]))
-                    {
-                        $button_extension = trim($button_type_array[2],'_'); 
-                        array_pop($button_type_array);
-                    }            
-                    else $button_extension = '';
-                    $button_type = implode('_', $button_type_array);
-
-                    if($button_text != '' && $button_type != '' && ($button_web_url != '' || $button_extension != ''))
-                    {
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['type'] = 'web_url';
-                        if($button_extension != '' && $button_extension == 'birthday'){
-                            $reply_bot[$k]['attachment']['payload']['buttons'][0]['messenger_extensions'] = 'true';
-                            $reply_bot[$k]['attachment']['payload']['buttons'][0]['webview_height_ratio'] = 'compact';
-                            $reply_bot[$k]['attachment']['payload']['buttons'][0]['url'] = base_url('webview_builder/get_birthdate?subscriber_id=#SUBSCRIBER_ID_REPLACE#');
-                        }
-                        else
-                            $reply_bot[$k]['attachment']['payload']['buttons'][0]['url'] = $button_web_url;
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['title'] = $button_text;
-
-                        if($button_extension != '' && $button_extension != 'birthday')
-                        {
-                            $reply_bot[$k]['attachment']['payload']['buttons'][0]['messenger_extensions'] = 'true';
-                            $reply_bot[$k]['attachment']['payload']['buttons'][0]['webview_height_ratio'] = $button_extension;
-                            // $reply_bot[$k]['attachment']['payload']['buttons'][$i-1]['fallback_url'] = $button_web_url;
-                        }
-
-                        if(!in_array($button_web_url, $white_listed_domain_array))
-                        {
-                            $need_to_whitelist_array[] = $button_web_url;
-                        }
-                    }
-                }
-                if($button_type == 'phone_number')
-                {
-                    if($button_text != '' && $button_type != '' && $button_call_us != '')
-                    {
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['type'] = 'phone_number';
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['payload'] = $button_call_us;
-                        $reply_bot[$k]['attachment']['payload']['buttons'][0]['title'] = $button_text;
-                    }
-                }
-
-
-            }
-
-            $bot_message['message'] = $reply_bot[$k]; 
-
+        } else {
+            $bot_message['message'] = array('text'=> $this->lang->line('Hello!'));
         }
-             
-        // domain white list section start
-        $this->load->library("fb_rx_login"); 
+
+        // تبييض الدومينات المطلوبة
+        $this->load->library("fb_rx_login");
         $domain_whitelist_insert_data = array();
+        $need_to_whitelist_array = array_values(array_unique(array_filter($need_to_whitelist_array)));
         foreach($need_to_whitelist_array as $value)
         {
-            $response=$this->fb_rx_login->domain_whitelist($page_access_token,$value);
-            if($response['status'] != '0')
+            if(empty($value)) continue;
+            $response = $this->fb_rx_login->domain_whitelist($page_access_token,$value);
+            if(isset($response['status']) && $response['status'] != '0')
             {
-                $temp_data = array();
-                $temp_data['user_id'] = $this->user_id;
-                $temp_data['messenger_bot_user_info_id'] = $messenger_bot_user_info_id;
-                $temp_data['page_id'] = $page_table_id;
-                $temp_data['domain'] = $value;
-                $temp_data['created_at'] = date("Y-m-d H:i:s");
-
-                $domain_whitelist_insert_data[] = $temp_data;
+                $domain_whitelist_insert_data[] = array(
+                    'user_id' => $this->user_id,
+                    'messenger_bot_user_info_id' => $messenger_bot_user_info_id_val,
+                    'page_id' => $page_table_id,
+                    'domain' => $value,
+                    'created_at' => date("Y-m-d H:i:s")
+                );
             }
         }
         if(!empty($domain_whitelist_insert_data)) $this->db->insert_batch('messenger_bot_domain_whitelist',$domain_whitelist_insert_data);
-        // domain white list section end
 
-        $campaign_message_send=$bot_message;
-        $campaign_message_send["recipient"]=array("id"=>"PUT_SUBSCRIBER_ID");
-
-        if($broadcast_type=='Non Promo')
-        {
-          $campaign_message_send["messaging_type"]="MESSAGE_TAG";
-          $campaign_message_send["tag"]=$message_tag;
+        // الرسالة النهائية
+        $campaign_message_send = $bot_message;
+        $campaign_message_send["recipient"] = array("id" => "PUT_SUBSCRIBER_ID");
+        if($broadcast_type === 'Non Promo') {
+            if (!isset($message_tag) || $message_tag==='') $message_tag = 'CONFIRMED_EVENT_UPDATE';
+            $campaign_message_send["messaging_type"] = "MESSAGE_TAG";
+            $campaign_message_send["tag"] = $message_tag;
+        } else {
+            $campaign_message_send["messaging_type"] = "RESPONSE";
         }
-        else $campaign_message_send["messaging_type"]="RESPONSE";
 
-        
-
-        $insert_data['message'] = json_encode($campaign_message_send,true);
-        $insert_data['user_id'] = $this->user_id;        
-        // $insert_data['template_type'] = $template_type;  
-        $insert_data['created_at'] = date('Y-m-d H:i:s');
-
-        if(!isset($schedule_type) || $broadcast_type!="Non Promo") $schedule_type='now';       
-        $insert_data['schedule_type'] = $schedule_type;        
-        if(!isset($schedule_time) || $broadcast_type!="Non Promo") $schedule_time = "";
-        if($broadcast_type!="Non Promo") $time_zone = "";
-
-        $insert_data['schedule_time'] = $schedule_time; 
-        $insert_data['page_name'] = $page_name;         
-        $insert_data["posting_status"]=$posting_status;  
-        $insert_data['timezone'] = $time_zone;  
-
-        if(!isset($label_ids) || !is_array($label_ids)) $label_ids=array();
-        if(!isset($excluded_label_ids) || !is_array($excluded_label_ids)) $excluded_label_ids=array();
-
-        if(!empty($label_ids)) $insert_data['label_ids'] = implode(',', $label_ids); else $insert_data['label_ids'] ="";
-        if(!empty($excluded_label_ids)) $insert_data['excluded_label_ids'] = implode(',', $excluded_label_ids); else $insert_data['excluded_label_ids'] = "";
-
-        $fb_label_names = array();
-        if(!empty($label_ids))
-        {
-            $fb_label_data=$this->basic->get_data("messenger_bot_broadcast_contact_group",array("where_in"=>array("id"=>$label_ids)));
-            foreach ($fb_label_data as $key => $value) 
-            {
-               if($value['invisible']=='0')
-               $fb_label_names[]=$value["group_name"];
-            }  
-        }
-        $insert_data['label_names'] = implode(',', $fb_label_names);
-
-        // =========24H and 24+1 campaign=========
+        // سياسة 24 ساعة (طبق فقط لو النوع مناسب)
         $promo_sql = "";
         date_default_timezone_set('UTC');
         $current_time  = date("Y-m-d H:i:s");
         $previous_time = date("Y-m-d H:i:s",strtotime('-23 hour',strtotime($current_time)));
-        if($broadcast_type=='24H Promo') $promo_sql = "last_subscriber_interaction_time > '{$previous_time}' AND";
-        if($broadcast_type=='24+1 Promo') $promo_sql = "(last_subscriber_interaction_time < '{$previous_time}' AND is_24h_1_sent='0') AND";
+        if($broadcast_type == '24H Promo') $promo_sql = "last_subscriber_interaction_time > '{$previous_time}' AND";
+        if($broadcast_type == '24+1 Promo') $promo_sql = "(last_subscriber_interaction_time < '{$previous_time}' AND is_24h_1_sent='0') AND";
         $this->_time_zone_set();
-        //========================================
 
-        $excluded_label_ids_temp=$excluded_label_ids;
-        $unsubscribe_labeldata=$this->basic->get_data("messenger_bot_broadcast_contact_group",array("where"=>array("user_id"=>$this->user_id,"page_id"=>$page_table_id,"unsubscribe"=>"1")));
-        foreach ($unsubscribe_labeldata as $key => $value) 
-        {
-            array_push($excluded_label_ids_temp, $value["id"]);
-        }
+        // استبعاد unsubscribe
+        if(!isset($excluded_label_ids) || !is_array($excluded_label_ids)) $excluded_label_ids = array();
+        $excluded_label_ids_temp = $excluded_label_ids;
+        $unsubscribe_labeldata = $this->basic->get_data("messenger_bot_broadcast_contact_group", array("where" => array("user_id" => $this->user_id, "page_id" => $page_table_id, "unsubscribe" => "1")));
+        foreach ($unsubscribe_labeldata as $v) { $excluded_label_ids_temp[] = $v["id"]; }
 
-        
+        // WHERE
+        if(!isset($label_ids) || !is_array($label_ids)) $label_ids = array();
         $sql_part = $sql_part2 = '';
-        
         if(count($label_ids) > 0) {
-            $filtered_label_ids = array_filter($label_ids, function($val) { return is_numeric($val); });
-            $joined_label_ids = join(",", $filtered_label_ids);
-            
-            $sql_subquery1 = <<<SQL
-            SELECT DISTINCT `subscriber_table_id` 
-                        FROM `messenger_bot_subscribers_label` 
-                        WHERE `contact_group_id` 
-                            IN ($joined_label_ids)
-            SQL;
-
-            $sql_part = <<<SQL
-            id IN ($sql_subquery1) 
-                    AND
-            SQL;
+            $filtered_label_ids = array_filter($label_ids, function($val){ return is_numeric($val); });
+            if(!empty($filtered_label_ids)) {
+                $joined_label_ids = join(",", $filtered_label_ids);
+                $sql_subquery1 = "SELECT DISTINCT `subscriber_table_id` FROM `messenger_bot_subscribers_label` WHERE `contact_group_id` IN ($joined_label_ids)";
+                $sql_part = "id IN ($sql_subquery1) AND";
+            }
         }
-
         if(count($excluded_label_ids_temp) > 0) {
-            $filtered_excluded_label_ids_temp = array_filter($excluded_label_ids_temp, function($val) { return is_numeric($val); });
-            $joined_excluded_label_ids = join(",", $filtered_excluded_label_ids_temp);
-            
-            $sql_subquery2 = <<<SQL
-            SELECT DISTINCT `subscriber_table_id` 
-                        FROM `messenger_bot_subscribers_label` 
-                        WHERE `contact_group_id` 
-                            IN ($joined_excluded_label_ids)
-            SQL;
-
-            $sql_part2 = <<<SQL
-            id NOT IN ($sql_subquery2) 
-                    AND
-            SQL;
+            $filtered_excluded_label_ids_temp = array_filter($excluded_label_ids_temp, function($val){ return is_numeric($val); });
+            if(!empty($filtered_excluded_label_ids_temp)) {
+                $joined_excluded_label_ids = join(",", $filtered_excluded_label_ids_temp);
+                $sql_subquery2 = "SELECT DISTINCT `subscriber_table_id` FROM `messenger_bot_subscribers_label` WHERE `contact_group_id` IN ($joined_excluded_label_ids)";
+                $sql_part2 = "id NOT IN ($sql_subquery2) AND";
+            }
         }
 
-        $sql_part3="";
+        $sql_part3 = "";
         $sql_part_array3 = array();
-        if($user_gender!='') $sql_part_array3[] = "gender = '{$user_gender}'";
-        if($user_time_zone!='') $sql_part_array3[] = "timezone = '{$user_time_zone}'";
-        if($user_locale!='') $sql_part_array3[] = "locale = '{$user_locale}'";
+        if(isset($user_gender) && $user_gender!='') $sql_part_array3[] = "gender = '{$user_gender}'";
+        if(isset($user_time_zone) && $user_time_zone!='') $sql_part_array3[] = "timezone = '{$user_time_zone}'";
+        if(isset($user_locale) && $user_locale!='') $sql_part_array3[] = "locale = '{$user_locale}'";
+        if(count($sql_part_array3)>0) $sql_part3 = implode(' AND ', $sql_part_array3)." AND ";
 
-        if(count($sql_part_array3)>0) 
-        {
-            $sql_part3 = implode(' AND ', $sql_part_array3);
-            $sql_part3 .=" AND ";
-        }
-
-        // $sql="SELECT messenger_bot_subscriber.* FROM messenger_bot_subscriber LEFT JOIN `messenger_bot_subscribers_label` ON `messenger_bot_subscribers_label`.`subscriber_table_id`=`messenger_bot_subscriber`.`id` WHERE ".$sql_part." ".$sql_part2." ".$sql_part3." ".$promo_sql." user_id = ".$this->user_id." AND unavailable = '0' AND is_bot_subscriber='1' AND page_table_id = {$page_table_id} AND social_media='".$media_type."' AND subscriber_type!='system'";
-        $sql = <<<SQL
+        $sql = "
         SELECT messenger_bot_subscriber.* 
             FROM messenger_bot_subscriber 
-            WHERE {$sql_part} {$sql_part2} {$sql_part3} {$promo_sql} user_id = $this->user_id
+            WHERE {$sql_part} {$sql_part2} {$sql_part3} {$promo_sql} user_id = {$this->user_id}
                 AND unavailable = '0' 
                 AND is_bot_subscriber='1' 
-                AND page_table_id = $page_table_id 
-                AND social_media = '$media_type' 
+                AND page_table_id = {$page_table_id} 
+                AND social_media = '{$media_type}' 
                 AND subscriber_type != 'system'
-        SQL;
-
-        $lead_list=$this->basic->execute_query($sql);
+        ";
+        $lead_list = $this->basic->execute_query($sql);
 
         $report = array();
-        $subscriber_auto_ids = [];   
-        foreach ($lead_list as $key => $value)
-        {          
-           // $temp=explode(',', $value['contact_group_id']);
-           // if(count($temp) > count($excluded_label_ids_temp))
-           // $result=array_intersect($temp, $excluded_label_ids_temp);
-           // else $result=array_intersect($excluded_label_ids_temp, $temp);
-           // if(count($result)>0) continue;
-
-           $total_thread++;
-
-           $report[$value['subscribe_id']] = array
-           (
-                "subscribe_id"=>$value["subscribe_id"],
-                "subscriber_auto_id"=>$value["id"],               
-                "subscriber_name"=>$value["first_name"],
-                "subscriber_lastname"=>$value["last_name"],
-                "sent"=>"0",
-                "sent_time"=>"",
-                "delivered"=>"0",
-                "delivery_time"=>"",
-                "opened"=>"0",
-                "open_time"=>"",
-                "clicked"=>"0",
-                "click_time"=>"",
-                "click_ref"=>"",
-                "message_sent_id"=>""
+        $subscriber_auto_ids = array();
+        foreach ($lead_list as $value)
+        {
+            $total_thread++;
+            $report[$value['subscribe_id']] = array(
+                "subscribe_id" => $value["subscribe_id"],
+                "subscriber_auto_id" => $value["id"],
+                "subscriber_name" => $value["first_name"],
+                "subscriber_lastname" => $value["last_name"],
+                "sent" => "0",
+                "sent_time" => "",
+                "delivered" => "0",
+                "delivery_time" => "",
+                "opened" => "0",
+                "open_time" => "",
+                "clicked" => "0",
+                "click_time" => "",
+                "click_ref" => "",
+                "message_sent_id" => ""
             );
             $subscriber_auto_ids[] = $value["id"];
         }
 
-        if($total_thread==0)
-        {
-            break;
-        }
+        // أهم نقطة: لو صفر، ما تسجلش حملة وهمية
+        if($total_thread==0) continue;
 
-        // 24+1 inactivation becuase he is already sending a promo message
+        // 24+1 mark
         if($broadcast_type!='24H Promo' && !empty($subscriber_auto_ids))
         {
-          $sql_24h="UPDATE messenger_bot_subscriber SET is_24h_1_sent='1' WHERE id IN (".implode(',', $subscriber_auto_ids).")";
-          $this->basic->execute_complex_query($sql_24h);
-        }
-        // ===============================================================
-
-        $status=$this->_check_usage($module_id=211,$request=$total_thread);
-        if($status=="2")  //monthly limit is exceeded, can not send another ,message this month
-        {
-            echo json_encode(array('status'=>'0','message'=>$this->lang->line("Sorry, your bulk to send subscriber message is exceeded.")));
-            exit();
-        }
-        else if($status=="3")  //monthly limit is exceeded, can not send another ,message this month
-        {
-            echo json_encode(array('status'=>'0','message'=>$this->lang->line("Sorry, your monthly limit to send subscriber message is exceeded.")));
-            exit();
+            $sql_24h = "UPDATE messenger_bot_subscriber SET is_24h_1_sent='1' WHERE id IN (".implode(',', $subscriber_auto_ids).")";
+            $this->basic->execute_complex_query($sql_24h);
         }
 
-        $insert_data["total_thread"]=$total_thread;
-        // $insert_data["report"]=json_encode($report);
+        // usage check
+        $status = $this->_check_usage($module_id=211,$request=$total_thread);
+        if($status=="2")
+        {
+            echo json_encode(array('status'=>'0','message'=>$this->lang->line("Sorry, your bulk to send subscriber message is exceeded.")), JSON_UNESCAPED_UNICODE);
+            exit();
+        }
+        else if($status=="3")
+        {
+            echo json_encode(array('status'=>'0','message'=>$this->lang->line("Sorry, your monthly limit to send subscriber message is exceeded.")), JSON_UNESCAPED_UNICODE);
+            exit();
+        }
+
+        // إدراج الحملة
+        $insert_data = array();
+        $insert_data['campaign_name'] = isset($campaign_name) ? $campaign_name : date('Y-m-d H:i');
+        $insert_data['page_id'] = $page_table_id;
+        $insert_data['broadcast_type'] = $broadcast_type;
+        $insert_data['message_tag'] = isset($message_tag) ? $message_tag : '';
+        $insert_data['user_gender'] = isset($user_gender) ? $user_gender : '';
+        $insert_data['user_time_zone'] = isset($user_time_zone) ? $user_time_zone : '';
+        $insert_data['user_locale'] = isset($user_locale) ? $user_locale : '';
+        $insert_data['social_media'] = $media_type; // مهم جداً
+        $insert_data['fb_page_id'] = $fb_page_id;
+        $insert_data['message'] = json_encode($campaign_message_send, JSON_UNESCAPED_UNICODE);
+        $insert_data['user_id'] = $this->user_id;
+        $insert_data['created_at'] = date('Y-m-d H:i:s');
+
+        // الجدولة
+        if(!isset($schedule_type) || ($broadcast_type!="Non Promo")) $schedule_type='now';
+        if(!isset($schedule_time) || ($broadcast_type!="Non Promo")) $schedule_time = "";
+        if($broadcast_type!="Non Promo") $time_zone = "";
+        $insert_data['schedule_type'] = $schedule_type ?? 'now';
+        $insert_data['schedule_time'] = $schedule_time;
+        $insert_data['page_name'] = $page_name;
+        $insert_data["posting_status"] = $posting_status;
+        $insert_data['timezone'] = isset($time_zone) ? $time_zone : '';
+
+        // labels
+        if(!isset($label_ids) || !is_array($label_ids)) $label_ids = array();
+        if(!isset($excluded_label_ids) || !is_array($excluded_label_ids)) $excluded_label_ids = array();
+        $insert_data['label_ids'] = !empty($label_ids) ? implode(',', $label_ids) : "";
+        $insert_data['excluded_label_ids'] = !empty($excluded_label_ids) ? implode(',', $excluded_label_ids) : "";
+        $fb_label_names = array();
+        if(!empty($label_ids))
+        {
+            $fb_label_data = $this->basic->get_data("messenger_bot_broadcast_contact_group", array("where_in" => array("id" => $label_ids)));
+            foreach ($fb_label_data as $v) if(isset($v['invisible']) && $v['invisible']=='0') $fb_label_names[] = $v["group_name"];
+        }
+        $insert_data['label_names'] = implode(',', $fb_label_names);
 
         if($this->basic->insert_data('messenger_bot_broadcast_serial',$insert_data))
         {
-            $campaign_id= $this->db->insert_id();
+            $created_any = true;
+            $campaign_id = $this->db->insert_id();
             $this->_insert_usage_log($module_id=211,$request=$total_thread);
 
-            $report_insert=array();
-            foreach($report as $key2=>$value2) 
-            {               
-                $client_thread_id_send = $key2;
-                $report_insert[]=array
-                (
-                    "campaign_id"=>$campaign_id,   
-                    "user_id"=>$this->user_id,   
-                    "page_id"=>$page_id,   
-                    "subscribe_id"=>$value2["subscribe_id"],   
-                    "subscriber_auto_id"=>$value2["subscriber_auto_id"],
-                    "subscriber_name"=>$value2['subscriber_name'],
-                    "subscriber_lastname"=>$value2['subscriber_lastname']
+            $report_insert = array();
+            foreach($report as $key2 => $value2)
+            {
+                $report_insert[] = array(
+                    "campaign_id" => $campaign_id,
+                    "user_id" => $this->user_id,
+                    "page_id" => $page_id,
+                    "subscribe_id" => $value2["subscribe_id"],
+                    "subscriber_auto_id" => $value2["subscriber_auto_id"],
+                    "subscriber_name" => $value2['subscriber_name'],
+                    "subscriber_lastname" => $value2['subscriber_lastname']
                 );
             }
-            $this->db->insert_batch('messenger_bot_broadcast_serial_send', $report_insert); // strong the leads to send message in database
+            if(!empty($report_insert)) $this->db->insert_batch('messenger_bot_broadcast_serial_send', $report_insert);
 
             $this->session->set_flashdata('broadcast_success',1);
         }
-        
-        }
-        
-        // if($total_thread==0)
-        // {
-        //     echo json_encode(array('status'=>'0','message'=>$this->lang->line("Campaign could not target any subscriber to reach message. Please try again with different targeting options.")));
-        //     exit();
-        // }
-        echo json_encode(array("status" => "1"));
+    } // foreach
+
+    if(!$created_any){
+        echo json_encode(array(
+            "status" => "0",
+            "message" => $this->lang->line("Campaign could not target any subscriber to reach message. Please try again with different targeting options.")
+        ), JSON_UNESCAPED_UNICODE);
+        exit;
     }
 
+    echo json_encode(array(
+        "status" => "1",
+        "csrf_token" => $this->session->userdata('csrf_token_session') ?: null
+    ), JSON_UNESCAPED_UNICODE);
+    exit;
+}
     public function edit_subscriber_broadcast_campaign($id=0)
     {  
         if($this->session->userdata('user_type') != 'Admin' && !in_array(211,$this->module_access))
