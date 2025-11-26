@@ -108,7 +108,75 @@
               </div>
                 
             </div>
+                        <!-- Global Broadcast Summary -->
+            <div id="broadcast_global_summary" class="row mb-3" style="display:none;">
 
+              <div class="col-12 col-md-3 mb-2">
+                <div class="card card-statistic-1">
+                  <div class="card-icon bg-primary">
+                    <i class="fas fa-users"></i>
+                  </div>
+                  <div class="card-wrap">
+                    <div class="card-header">
+                      <h4><?php echo $this->lang->line('Targeted Subscribers') ?: 'Targeted Subscribers'; ?></h4>
+                    </div>
+                    <div class="card-body" id="sum_total_targeted">0</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-12 col-md-3 mb-2">
+                <div class="card card-statistic-1">
+                  <div class="card-icon bg-info">
+                    <i class="far fa-paper-plane"></i>
+                  </div>
+                  <div class="card-wrap">
+                    <div class="card-header">
+                      <h4><?php echo $this->lang->line('Sent'); ?> <span class="small text-muted">(%)</span></h4>
+                    </div>
+                    <div class="card-body">
+                      <span id="sum_total_sent">0</span>
+                      <span class="small text-muted">(<span id="sum_sent_rate">0</span>%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-12 col-md-3 mb-2">
+                <div class="card card-statistic-1">
+                  <div class="card-icon bg-success">
+                    <i class="fas fa-check-circle"></i>
+                  </div>
+                  <div class="card-wrap">
+                    <div class="card-header">
+                      <h4><?php echo $this->lang->line('Delivered'); ?> <span class="small text-muted">(%)</span></h4>
+                    </div>
+                    <div class="card-body">
+                      <span id="sum_total_delivered">0</span>
+                      <span class="small text-muted">(<span id="sum_delivery_rate">0</span>%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="col-12 col-md-3 mb-2">
+                <div class="card card-statistic-1">
+                  <div class="card-icon bg-warning">
+                    <i class="fas fa-envelope-open"></i>
+                  </div>
+                  <div class="card-wrap">
+                    <div class="card-header">
+                      <h4><?php echo $this->lang->line('Open'); ?> <span class="small text-muted">(%)</span></h4>
+                    </div>
+                    <div class="card-body">
+                      <span id="sum_total_open">0</span>
+                      <span class="small text-muted">(<span id="sum_open_rate">0</span>%)</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
             <div class="table-responsive2">
                 <input type="hidden" id="put_page_id">
                 <table class="table table-bordered" id="mytable">
@@ -190,20 +258,42 @@
 	  bFilter: false,
 	  order: [[ 12, "desc" ]],
 	  pageLength: 10,
-	  ajax: {
-          url: base_url+'messenger_bot_enhancers/subscriber_broadcast_campaign_data',
-          type: 'POST',
-          cache: false, // منع الكاش نهائياً
-          data: function ( d )
-          {
-              d.search_page_id = $('#search_page_id').val();
-              d.search_value = $('#search_value').val();
-              d.search_status = $('#search_status').val();
-              d.campaign_date_range = $('#campaign_date_range_val').val();
-              d.csrf_token = $("#csrf_token").val();
-              d.prevent_cache = new Date().getTime(); // رقم عشوائي لإجبار السيرفر على الرد ببيانات جديدة
-          }
-      },
+	   ajax: {
+    url: base_url+'messenger_bot_enhancers/subscriber_broadcast_campaign_data',
+    type: 'POST',
+    cache: false,
+    data: function ( d )
+    {
+        d.search_page_id      = $('#search_page_id').val();
+        d.search_value        = $('#search_value').val();
+        d.search_status       = $('#search_status').val();
+        d.campaign_date_range = $('#campaign_date_range_val').val();
+        d.csrf_token          = $("#csrf_token").val();
+        d.prevent_cache       = new Date().getTime();
+    },
+    dataSrc: function (json) {
+        try {
+            if (json && json.summary) {
+                $('#broadcast_global_summary').show();
+                $('#sum_total_targeted').text( json.summary.total_targeted || 0 );
+                $('#sum_total_sent').text( json.summary.total_sent || 0 );
+                $('#sum_total_delivered').text( json.summary.total_delivered || 0 );
+                $('#sum_total_open').text( json.summary.total_open || 0 );
+
+                $('#sum_sent_rate').text( json.summary.sent_rate || 0 );
+                $('#sum_delivery_rate').text( json.summary.delivery_rate || 0 );
+                $('#sum_open_rate').text( json.summary.open_rate || 0 );
+            } else {
+                $('#broadcast_global_summary').hide();
+            }
+        } catch(e) {
+            if (window.console && console.error) {
+                console.error('broadcast summary update error', e, json);
+            }
+        }
+        return json.data;
+    }
+},
 	  language: 
 	  {
 	    url: "<?php echo base_url('assets/modules/datatables/language/'.$this->language.'.json'); ?>"
